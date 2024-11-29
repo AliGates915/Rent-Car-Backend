@@ -7,6 +7,6 @@ const NewVehicleSchema = new mongoose.Schema({
     
 }, { timestamps: true });
 
-const NewVehicle = mongoose.model('NewVehicle', NewVehicleSchema);
+const NewVehicle = mongoose.model('Photo', NewVehicleSchema);
 
 export default NewVehicle;

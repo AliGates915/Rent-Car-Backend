@@ -12,7 +12,7 @@ const vehicleSchema = new mongoose.Schema({
   chassisNo: { type: String,  },
   engineNo: { type: String,  },
   fuelType: { type: String, required: true },
-  fuelTankCapacity: { type: Number },
+  fuelTankCapacity: { type: String },
   maxSpeed: { type: Number },
   seatingCapacity: { type: Number },
   inspectionDate: { type: Date },
@@ -34,7 +34,7 @@ const vehicleSchema = new mongoose.Schema({
   wheelPanna: { type: Boolean },
   mudFlaps: { type: Boolean },
   floorMat: { type: Boolean },
-  photos: [String], // Store file paths for photos
+  photos: [String], 
 });
 
 const VehicleDetails = mongoose.model('VehicleDetails', vehicleSchema);
