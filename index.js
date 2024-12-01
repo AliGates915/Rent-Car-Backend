@@ -8,6 +8,9 @@ import VehicleType from "./routes/vehicleType.js";
 import RentType from "./routes/rentType.js";
 import NewVehicle from "./routes/newVehicle.js";
 import VehicleDetails from "./routes/vehicleDetails.js";
+import OwnerDetails from "./routes/ownerDetails.js";
+import CustomerDetails from "./routes/customerDetails.js";
+import RentReceipt from "./routes/rentReceipt.js";
 import VehicleMaintenance from "./routes/vehicleMaintenance.js";
 
 const app = express();
@@ -30,6 +33,9 @@ app.use(cookieParser());
 app.use("/vehicleType", VehicleType);
 app.use("/new-vehicle", NewVehicle);
 app.use("/vehicle-details", VehicleDetails);
+app.use("/owner-details", OwnerDetails);
+app.use("/customer-details", CustomerDetails);
+app.use("/rent-receipt", RentReceipt);
 app.use("/rentType", RentType);
 app.use("/vehicleMaintenance", VehicleMaintenance);
 
