@@ -5,6 +5,13 @@ import {
   deleteVehicleDetails,
   getVehicleDetails,
   getAllVehicleDetails,
+  createBookVehicle,
+  getReturnVehicles,
+  createReturnVehicle,
+  createSaveVehicleForm,
+  getAllSaveVehicles,
+  createSaveVehicle,
+  createSaveVehicleById
 } from "../controllers/vehicleDetails.js";
 // import { verifyAdmin } from '../utils/verifyToken.js';
 const router = express.Router();
@@ -21,7 +28,19 @@ router.delete("/:id", deleteVehicleDetails);
 // Get a specific TourType by ID
 router.get("/:id", getVehicleDetails);
 
-// Get all TourTypes
+// Get all Booking Vehicle
 router.get("/", getAllVehicleDetails);
+router.post('/book-vehicle/:id', createBookVehicle)
+router.get('/return-vehicle', getReturnVehicles)
+router.post('/return-vehicle/:id', createReturnVehicle)
+
+// save vehicle
+router.get("/", getAllSaveVehicles);
+// isSaved True
+router.post('/save-return-vehicle/:id', createSaveVehicle)
+router.post('/save-form', createSaveVehicleForm)
+router.get('/save-vehicle', getAllSaveVehicles)
+// both are false
+router.post('/save-vehicle/:id', createSaveVehicleById) 
 
 export default router;

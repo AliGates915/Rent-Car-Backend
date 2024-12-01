@@ -4,16 +4,26 @@ const vehicleSchema = new mongoose.Schema({
   registrationNo: { type: String, required: true },
   registeredCity: { type: String },
   carType: { type: String },
-  carMake: { type: String  , required: true},
-  carModel: { type: String  , required: true},
-  yearOfModel: { type: String , required: true },
-  ratePerDay : { type: Number , required: true },
+  carMake: { type: String  , required: true  [true, 'carMake is required'],},
+  carModel: { type: String  , required: true
+    [true, 'carModel is required'],
+  },
+  yearOfModel: { type: String , required: true 
+    [true, 'yearOfModel is required'],
+  },
+  ratePerDay : { type: Number , required: true 
+    [true, 'ratePerDay is required'],
+  },
   color: { type: String },
   transmissionType: { type: String },
   engineCapacity: { type: String },
-  chassisNo: { type: String, required: true },
+  chassisNo: { type: String, required: true 
+    [true, 'chassisNo is required'],
+  },
   engineNo: { type: String,  },
-  fuelType: { type: String, required: true },
+  fuelType: { type: String, required: true 
+    [true, 'fuelType is required'],
+  },
   fuelTankCapacity: { type: String },
   maxSpeed: { type: Number },
   seatingCapacity: { type: Number },
@@ -37,6 +47,23 @@ const vehicleSchema = new mongoose.Schema({
   mudFlaps: { type: Boolean },
   floorMat: { type: Boolean },
   photos: [String], 
+  isBooked: {
+    type: Boolean,
+    default: false,
+  },
+  // for save 
+  date: { type: Date},
+  time: { type: String },
+  condition: { type: String },
+    balanceAmount: { 
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'RentReceipt',
+    },
+    isSaved: {
+        type: Boolean,
+        default: false,
+    },
+
 });
 
 const VehicleDetails = mongoose.model('VehicleDetails', vehicleSchema);

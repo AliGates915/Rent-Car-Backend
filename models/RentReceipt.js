@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 // RentReceipt Schema
 const rentReceiptSchema = new mongoose.Schema({
   regDate: { type: Date, required: true },
-  serialNo: { type: String, required: true },
+  serialNo: { type: Number, required: true, unique: true },
   customerInfo: {
     customerName: { type: String },
     cinc: { type: String },

@@ -1,5 +1,5 @@
 import VehicleDetails from "../models/VehicleDetails.js";
-import Photo from '../models/NewVehicle.js'
+import RentReceipt from '../models/RentReceipt.js';
 import mongoose from "mongoose";
 
 // Create VehicleType
@@ -31,15 +31,23 @@ export const createVehicleDetails = async (req, res, next) => {
 
 // Update VehicleType
 export const updateVehicleDetails = async (req, res, next) => {
-    try {
-        const { id } = req.params;
-        const updatedVehicle = await VehicleDetails.findByIdAndUpdate(id, req.body, { new: true });
-        if (!updatedVehicle) return res.status(404).json({ message: 'Vehicle not found' });
-        res.status(200).json(updatedVehicle);
-      } catch (error) {
-        res.status(500).json({ error: 'Failed to update vehicle' });
-      }
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid ID format' });
+    }
+
+    const updatedVehicle = await VehicleDetails.findByIdAndUpdate(id, req.body, { new: true });
+    if (!updatedVehicle) {
+      return res.status(404).json({ message: 'Vehicle not found' });
+    }
+    res.status(200).json(updatedVehicle);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update vehicle' });
+  }
 };
+
 
 // Delete VehicleType
 export const deleteVehicleDetails = async (req, res, next) => {
@@ -54,23 +62,23 @@ export const deleteVehicleDetails = async (req, res, next) => {
   }
 };
 
-// Get a specific VehicleType by ID
+// Get a specific VehicleDetails by ID
 export const getVehicleDetails = async (req, res, next) => {
   try {
-    const hotelId = req.params.id;
+    // const hotelId = req.params.id;
 
     // Validate if the id is a valid ObjectId
-    if (!mongoose.Types.ObjectId.isValid(hotelId)) {
-      return res.status(400).json({ message: "Invalid ID format" });
-    }
+    // if (!mongoose.Types.ObjectId.isValid(hotelId)) {
+    //   return res.status(400).json({ message: "Invalid ID format" });
+    // }
 
-    const hotel = await VehicleDetails.findById(hotelId);
-    if (hotel) {
-      console.log("Fetched hotel:", hotel);
-    }
+    const vehicles  = await VehicleDetails.find({ isBooked: false });
+    // if (vehicles ) {
+    //   console.log("Fetched hotel:", vehicles );
+    // }
 
-    if (!hotel) {
-      return res.status(404).json({ message: "Hotel not found" });
+    if (!vehicles ) {
+      return res.status(404).json({ message: "vehicles  not found" });
     }
 
     res.status(200).json(hotel);
@@ -82,14 +90,187 @@ export const getVehicleDetails = async (req, res, next) => {
 // Get all VehicleTypes
 export const getAllVehicleDetails = async (req, res, next) => {
   try {
-    const vehicleTypes = await VehicleDetails.find().populate('photos');
+    const availableVehicles = await VehicleDetails.find({ isBooked: false });
 
-    if (vehicleTypes.length === 0) {
-      return res.status(200).json({ message: "No Vehicle Types found" });
+    if (availableVehicles.length === 0) {
+      return res.status(200).json({ message: "No available vehicles found" });
     }
-    res.status(200).json(vehicleTypes);
+
+    res.status(200).json(availableVehicles);
   } catch (error) {
-    console.error("Error fetching vehicle details:", error); // Detailed log
-    res.status(500).json({ error: "Failed to fetch vehicle details", message: error.message });
+    console.error("Error fetching vehicle details:", error);
+    res.status(500).json({ error: "Failed to fetch vehicle details" });
   }
 };
+
+// Book vehicle 
+export const createBookVehicle = async (req, res, next) => {
+  const { id: vehicleId } = req.params; // Extract ID from params
+
+  if (!mongoose.Types.ObjectId.isValid(vehicleId)) {
+    return res.status(400).json({ error: "Invalid Vehicle ID" });
+  }
+
+  try {
+    // Find the vehicle first
+    const vehicle = await VehicleDetails.findById(vehicleId);
+
+    if (!vehicle) {
+      return res.status(404).json({ error: 'Vehicle not found' });
+    }
+    if (vehicle.isBooked) {
+      return res.status(400).json({ error: 'Vehicle already booked' });
+    }
+
+    // Only update `isBooked` field without revalidating other fields
+    vehicle.isBooked = true;
+    await vehicle.save();
+
+    res.json({ message: 'Vehicle booked successfully', vehicle });
+  } catch (error) {
+    console.error("Error booking vehicle:", error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+// Return vehicle 
+export const getReturnVehicles = async (req, res) => {
+  try {
+    const rentedVehicles = await VehicleDetails.find({ isBooked: true });
+    res.json(rentedVehicles);
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Return the vehicle
+export const createReturnVehicle = async (req, res, next) => {
+  const vehicleId = req.params.id;
+  
+    if (!mongoose.Types.ObjectId.isValid(vehicleId)) {
+      return res.status(400).json({ error: "Invalid Vehicle ID" });
+    }
+  
+    try {
+      const vehicle = await VehicleDetails.findById(vehicleId);
+  
+      if (!vehicle) {
+        return res.status(404).json({ error: 'Vehicle not found' });
+      }
+  
+      if (!vehicle.isBooked) {
+        return res.status(400).json({ error: 'Vehicle is not rented' });
+      }
+  
+      vehicle.isBooked = false;
+      await vehicle.save();
+  
+      res.json({ message: 'Vehicle returned successfully', vehicle });
+    } catch (error) {
+      res.status(500).json({ error: 'Server error' });
+    }
+  };
+
+
+
+  // For save vehicle details
+  export const createSaveVehicleForm = async (req, res) => {
+    try {
+        const { date, time, condition, balanceAmount } = req.body;
+
+        // Check if RentReceipt exists (since we are referencing it)
+        const rentReceipt = await RentReceipt.findById(balanceAmount);
+        if (!rentReceipt) {
+            return res.status(400).json({ message: "Invalid RentReceipt ID" });
+        }
+
+        // Create a new SaveVehicle document
+        const newSaveVehicle = new VehicleDetails({
+            date,
+            time,
+            condition,
+            balanceAmount, // This will reference the RentReceipt
+        });
+
+        // Save the SaveVehicle
+        await newSaveVehicle.save();
+        res.status(201).json({ message: "SaveVehicle created successfully", data: newSaveVehicle });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// Controller to fetch all SaveVehicle documents
+export const getAllSaveVehicles = async (req, res) => {
+    try {
+        const saveVehicles = await VehicleDetails.find().populate('balanceAmount', 'amount'); // Populate RentReceipt reference (if needed)
+
+        if (!saveVehicles.length) {
+            return res.status(404).json({ message: "No SaveVehicles found" });
+        }
+
+        res.status(200).json({ data: saveVehicles });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+export const createSaveVehicle = async (req, res) => {
+  const { id: vehicleId } = req.params; // Extract ID from params
+
+  if (!mongoose.Types.ObjectId.isValid(vehicleId)) {
+    return res.status(400).json({ error: "Invalid Vehicle ID" });
+  }
+
+  try {
+    // Find the vehicle first
+    const vehicle = await VehicleDetails.findById(vehicleId);
+
+    if (!vehicle) {
+      return res.status(404).json({ error: 'Vehicle not found' });
+    }
+    if (vehicle.isSaved) {
+      return res.status(400).json({ error: 'Vehicle already booked' });
+    }
+
+    // Only update `isBooked` field without revalidating other fields
+    vehicle.isSaved = true;
+    await vehicle.save();
+
+    res.json({ message: 'Vehicle booked successfully', vehicle });
+  } catch (error) {
+    console.error("Error booking vehicle:", error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Return the vehicle
+export const createSaveVehicleById = async (req, res, next) => {
+  const vehicleId = req.params.id;
+  
+    if (!mongoose.Types.ObjectId.isValid(vehicleId)) {
+      return res.status(400).json({ error: "Invalid Vehicle ID" });
+    }
+  
+    try {
+      const vehicle = await VehicleDetails.findById(vehicleId);
+  
+      if (!vehicle) {
+        return res.status(404).json({ error: 'Vehicle not found' });
+      }
+  
+      if (!vehicle.isSaved) {
+        return res.status(400).json({ error: 'Vehicle is not rented' });
+      }
+  
+      vehicle.isSaved = false;
+      vehicle.isBooked = false;
+
+      await vehicle.save();
+  
+      res.json({ message: 'Vehicle returned successfully', vehicle });
+    } catch (error) {
+      res.status(500).json({ error: 'Server error' });
+    }
+  };

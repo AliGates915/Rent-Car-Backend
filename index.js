@@ -12,6 +12,8 @@ import OwnerDetails from "./routes/ownerDetails.js";
 import CustomerDetails from "./routes/customerDetails.js";
 import RentReceipt from "./routes/rentReceipt.js";
 import VehicleMaintenance from "./routes/vehicleMaintenance.js";
+import BookVehicle from "./controllers/bookVehicle.js";
+
 
 const app = express();
 dotenv.config();
@@ -36,6 +38,7 @@ app.use("/vehicle-details", VehicleDetails);
 app.use("/owner-details", OwnerDetails);
 app.use("/customer-details", CustomerDetails);
 app.use("/rent-receipt", RentReceipt);
+app.use("/", BookVehicle);
 app.use("/rentType", RentType);
 app.use("/vehicleMaintenance", VehicleMaintenance);
 

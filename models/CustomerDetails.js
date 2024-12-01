@@ -7,6 +7,7 @@ const customerDetailsSchema = new mongoose.Schema({
     fatherName: { type: String },
     address: { type: String },
     cinc: { type: String},
+    totalTransactions: { type: Number },
     mobileNo: { type: String },
     phone: { type: String },
     city: { type: String },
