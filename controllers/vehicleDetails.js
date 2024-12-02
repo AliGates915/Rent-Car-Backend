@@ -81,7 +81,7 @@ export const getVehicleDetails = async (req, res, next) => {
       return res.status(404).json({ message: "vehicles  not found" });
     }
 
-    res.status(200).json(hotel);
+    res.status(200).json(vehicles);
   } catch (err) {
     next(err);
   }
@@ -102,6 +102,7 @@ export const getAllVehicleDetails = async (req, res, next) => {
     res.status(500).json({ error: "Failed to fetch vehicle details" });
   }
 };
+
 
 // Book vehicle 
 export const createBookVehicle = async (req, res, next) => {
@@ -175,23 +176,35 @@ export const createReturnVehicle = async (req, res, next) => {
   // For save vehicle details
   export const createSaveVehicleForm = async (req, res) => {
     try {
-        const { date, time, condition, balanceAmount } = req.body;
+      const { date, time, balanceAmount, condition, rentReceiptId } = req.body;
+    
+      // Log incoming request data
+      console.log('Request Body:', req.body);
+  
+      // Validate data
+      if (!date || !time || !balanceAmount || !condition || !rentReceiptId) {
+          return res.status(400).json({ message: 'Missing required fields' });
+      }
+  
+      // Check if rentReceiptId is valid ObjectId
+      if (!mongoose.Types.ObjectId.isValid(rentReceiptId)) {
+          return res.status(400).json({ message: 'Invalid RentReceipt ID' });
+      }
+  
+    // Check if RentReceipt exists
+    const rentReceipt = await RentReceipt.findById(rentReceiptId);
+    if (!rentReceipt) {
+        return res.status(400).json({ message: "RentReceipt not found" });
+    }
 
-        // Check if RentReceipt exists (since we are referencing it)
-        const rentReceipt = await RentReceipt.findById(balanceAmount);
-        if (!rentReceipt) {
-            return res.status(400).json({ message: "Invalid RentReceipt ID" });
-        }
+    // Now create the VehicleDetails document, where balanceAmount is the reference to RentReceipt
+    const newSaveVehicle = new VehicleDetails({
+        date,
+        time,
+        condition,
+        balanceAmount: rentReceipt._id,  // Save RentReceipt's ObjectId as balanceAmount
+    });
 
-        // Create a new SaveVehicle document
-        const newSaveVehicle = new VehicleDetails({
-            date,
-            time,
-            condition,
-            balanceAmount, // This will reference the RentReceipt
-        });
-
-        // Save the SaveVehicle
         await newSaveVehicle.save();
         res.status(201).json({ message: "SaveVehicle created successfully", data: newSaveVehicle });
     } catch (error) {
@@ -200,21 +213,24 @@ export const createReturnVehicle = async (req, res, next) => {
     }
 };
 
+
+
 // Controller to fetch all SaveVehicle documents
-export const getAllSaveVehicles = async (req, res) => {
-    try {
-        const saveVehicles = await VehicleDetails.find().populate('balanceAmount', 'amount'); // Populate RentReceipt reference (if needed)
+export const getAllSaves = async (req, res, next) => {
+  try {
+    const availableVehicles = await VehicleDetails.find({ isSaved: true });
 
-        if (!saveVehicles.length) {
-            return res.status(404).json({ message: "No SaveVehicles found" });
-        }
-
-        res.status(200).json({ data: saveVehicles });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Server Error" });
+    if (availableVehicles.length === 0) {
+      return res.status(200).json({ message: "No available vehicles found" });
     }
+
+    res.status(200).json(availableVehicles);
+  } catch (error) {
+    console.error("Error fetching vehicle details:", error);
+    res.status(500).json({ error: "Failed to fetch vehicle details" });
+  }
 };
+
 
 export const createSaveVehicle = async (req, res) => {
   const { id: vehicleId } = req.params; // Extract ID from params

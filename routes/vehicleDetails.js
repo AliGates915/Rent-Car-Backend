@@ -9,7 +9,7 @@ import {
   getReturnVehicles,
   createReturnVehicle,
   createSaveVehicleForm,
-  getAllSaveVehicles,
+  getAllSaves,
   createSaveVehicle,
   createSaveVehicleById
 } from "../controllers/vehicleDetails.js";
@@ -30,16 +30,16 @@ router.get("/:id", getVehicleDetails);
 
 // Get all Booking Vehicle
 router.get("/", getAllVehicleDetails);
+router.get('/saveVehicle', getAllSaves)
+
 router.post('/book-vehicle/:id', createBookVehicle)
 router.get('/return-vehicle', getReturnVehicles)
 router.post('/return-vehicle/:id', createReturnVehicle)
 
 // save vehicle
-router.get("/", getAllSaveVehicles);
 // isSaved True
 router.post('/save-return-vehicle/:id', createSaveVehicle)
 router.post('/save-form', createSaveVehicleForm)
-router.get('/save-vehicle', getAllSaveVehicles)
 // both are false
 router.post('/save-vehicle/:id', createSaveVehicleById) 
 
