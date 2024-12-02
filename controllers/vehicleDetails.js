@@ -104,6 +104,20 @@ export const getAllVehicleDetails = async (req, res) => {
   }
 };
 
+export const getAllVehicleDetailsDisplay = async (req, res) => {
+  try {
+    const vehicles = await VehicleDetails.find();
+
+    if (vehicles.length === 0) {
+      return res.status(404).json({ message: 'No vehicles found' });
+    }
+
+    res.status(200).json(vehicles);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
 
 
 

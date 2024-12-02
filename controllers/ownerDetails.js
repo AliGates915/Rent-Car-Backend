@@ -3,24 +3,51 @@ import OwnerDetails from "../models/OwnerDetails.js";
 // Create a new Owner
 export const createOwnerDetails = async (req, res, next) => {
   try {
-    // Get the last ownerCode and increment it, start from 1 if no records exist
-    const lastOwner = await OwnerDetails.findOne().sort({ ownerCode: -1 });
-    const nextOwnerCode = lastOwner ? lastOwner.ownerCode + 1 : 1;
+    const { ownerName, vehicle } = req.body;
 
-    // Create a new OwnerDetails instance
-    const newOwner = new OwnerDetails({
-      ...req.body,
-      ownerCode: nextOwnerCode, // Use the next available owner code
-    });
+    // Check if the owner already exists
+    let existingOwner = await OwnerDetails.findOne({ ownerName });
 
-    // Save the new owner to the database
-    const savedOwner = await newOwner.save();
-    res.status(201).json(savedOwner);
+    if (existingOwner) {
+      // If owner exists, increment the totalVehicle count and add the new vehicle
+      existingOwner.totalVehicles = (existingOwner.totalVehicles || 1) + 1;
+
+      if (vehicle) {
+        existingOwner.vehicles.push(vehicle);
+      }
+
+      // Save the updated owner details
+      const updatedOwner = await existingOwner.save();
+      return res.status(200).json({
+        message: "Owner already exists. Vehicle added successfully.",
+        ownerDetails: updatedOwner,
+      });
+    } else {
+      // Get the last ownerCode and increment it, start from 1 if no records exist
+      const lastOwner = await OwnerDetails.findOne().sort({ ownerCode: -1 });
+      const nextOwnerCode = lastOwner ? lastOwner.ownerCode + 1 : 1;
+
+      // Create a new OwnerDetails instance with 1 vehicle
+      const newOwner = new OwnerDetails({
+        ...req.body,
+        ownerCode: nextOwnerCode,
+        totalVehicles: 1, // Start with 1 vehicle
+        vehicles: vehicle ? [vehicle] : [], // Add the vehicle if provided
+      });
+
+      // Save the new owner to the database
+      const savedOwner = await newOwner.save();
+      res.status(201).json(savedOwner);
+    }
   } catch (error) {
     console.error("Error creating owner details:", error);
-    res.status(500).json({ message: "Failed to create owner details", error: error.message });
+    res.status(500).json({
+      message: "Failed to create owner details",
+      error: error.message,
+    });
   }
 };
+
 
 // Update OwnerDetails by ID
 export const updateOwnerDetails = async (req, res, next) => {
