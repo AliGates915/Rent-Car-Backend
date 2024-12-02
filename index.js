@@ -20,7 +20,7 @@ dotenv.config();
 
 app.use(
   cors({
-    origin: ["http://localhost:3000"],
+    origin: ["http://localhost:3000", 'https://rent-car-frontend-flax.vercel.app'],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true,
   })
