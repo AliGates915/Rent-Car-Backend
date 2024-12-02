@@ -3,13 +3,14 @@ import {
   createVehicleDetails,
   updateVehicleDetails,
   deleteVehicleDetails,
-  getVehicleDetails,
+  // getVehicleDetails,
   getAllVehicleDetails,
   createBookVehicle,
   getReturnVehicles,
   createReturnVehicle,
   createSaveVehicleForm,
   getAllSaves,
+  getVehiclesDetails,
   createSaveVehicle,
   createSaveVehicleById
 } from "../controllers/vehicleDetails.js";
@@ -26,19 +27,21 @@ router.put("/:id", updateVehicleDetails);
 router.delete("/:id", deleteVehicleDetails);
 
 // Get a specific TourType by ID
-router.get("/:id", getVehicleDetails);
+// router.get("/:id", getVehicleDetails);
 
 // Get all Booking Vehicle
 router.get("/", getAllVehicleDetails);
-router.get('/saveVehicle', getAllSaves)
+router.get("/booking", getVehiclesDetails);
 
 router.post('/book-vehicle/:id', createBookVehicle)
 router.get('/return-vehicle', getReturnVehicles)
+// No need
 router.post('/return-vehicle/:id', createReturnVehicle)
 
 // save vehicle
 // isSaved True
 router.post('/save-return-vehicle/:id', createSaveVehicle)
+router.get('/saveVehicle', getAllSaves)
 router.post('/save-form', createSaveVehicleForm)
 // both are false
 router.post('/save-vehicle/:id', createSaveVehicleById) 
