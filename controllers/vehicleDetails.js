@@ -6,13 +6,14 @@ import mongoose from "mongoose";
 export const createVehicleDetails = async (req, res, next) => {
   try {
     const { photos, ...vehicleData } = req.body;
+   
 
     // Create a new VehicleDetails document with photo URLs directly
     const newVehicle = new VehicleDetails({
       ...vehicleData,
       photos, // Save photo URLs directly in the vehicle document
     });
-
+    newVehicle.status = "Available";
     // Save the vehicle document to the database
     const savedVehicle = await newVehicle.save();
 
@@ -142,6 +143,7 @@ export const createBookVehicle = async (req, res, next) => {
 
     // Only update `isBooked` field without revalidating other fields
     vehicle.isBooked = true;
+    vehicle.status = "Rent";
     await vehicle.save();
 
     res.json({ message: 'Vehicle booked successfully', vehicle });
@@ -308,6 +310,7 @@ export const createSaveVehicleById = async (req, res) => {
 
     vehicle.isSaved = false;
     vehicle.isBooked = false;
+    vehicle.status = "Available";
 
     await vehicle.save();
     console.log("Vehicle updated successfully:", vehicle);  // Debug

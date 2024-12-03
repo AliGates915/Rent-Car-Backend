@@ -54,6 +54,7 @@ const vehicleSchema = new mongoose.Schema({
   // for save 
   date: { type: Date},
   time: { type: String },
+  status: { type: String },
   condition: { type: String },
     balanceAmount: { 
         type: mongoose.Schema.Types.ObjectId,

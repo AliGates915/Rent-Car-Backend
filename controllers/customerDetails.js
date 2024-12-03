@@ -12,7 +12,7 @@ export const createCustomerDetails = async (req, res, next) => {
       ...req.body,
       ownerCode: nextOwnerCode, // Automatically assign the next ownerCode
     });
-
+    newCustomer.totalTransactions = 0;
     // Save to database
     const savedCustomer = await newCustomer.save();
     res.status(201).json(savedCustomer);
