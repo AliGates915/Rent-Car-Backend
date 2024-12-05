@@ -30,6 +30,8 @@ const vehicleSchema = new mongoose.Schema({
   inspectionDate: { type: Date },
   inspectionMileage: { type: String },
   location: { type: String },
+  fuel: { type: String },
+  priceVehicle: { type: String },
   airConditioner: { type: Boolean },
   heater: { type: Boolean },
   sunRoof: { type: Boolean },
@@ -46,6 +48,7 @@ const vehicleSchema = new mongoose.Schema({
   wheelPanna: { type: Boolean },
   mudFlaps: { type: Boolean },
   floorMat: { type: Boolean },
+  documents: { type: Boolean },
   photos: [String], 
   isBooked: {
     type: Boolean,

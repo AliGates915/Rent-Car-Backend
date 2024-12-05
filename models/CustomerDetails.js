@@ -21,6 +21,8 @@ const customerDetailsSchema = new mongoose.Schema({
     profilePhotoUrl: { type: String },
     CINCPhotos: { type: [String] }, 
     DrivingLicense: { type: String },
+    thumbImage: { type: String },
+    signatureImage: { type: String },
   
 }, { timestamps: true });
 

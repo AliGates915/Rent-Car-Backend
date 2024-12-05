@@ -16,6 +16,7 @@ const rentReceiptSchema = new mongoose.Schema({
     referenceMobile: { type: String },
   },
   vehicleInfo: {
+    registrationNo: { type: String },
     carType: { type: String },
     carMake: { type: String },
     carModel: { type: String },
@@ -41,6 +42,11 @@ const rentReceiptSchema = new mongoose.Schema({
     wheelPanna: { type: Boolean, default: false },
     mudFlaps: { type: Boolean, default: false },
     floorMat: { type: Boolean, default: false },
+    withDriver: { type: Boolean, default: false },
+    selfDriver: { type: Boolean, default: false },
+  },
+  rentInfo: {
+    rentTypes: { type: String, },
   },
   rentalInfo: {
     dateFrom: { type: Date },
