@@ -12,7 +12,8 @@ import OwnerDetails from "./routes/ownerDetails.js";
 import CustomerDetails from "./routes/customerDetails.js";
 import RentReceipt from "./routes/rentReceipt.js";
 import VehicleMaintenance from "./routes/vehicleMaintenance.js";
-import BookVehicle from "./controllers/bookVehicle.js";
+import  PaymentVoucher  from "./routes/payment.js";
+import  ExpenseVoucher  from "./routes/expense.js";
 
 
 const app = express();
@@ -38,8 +39,9 @@ app.use("/vehicle-details", VehicleDetails);
 app.use("/owner-details", OwnerDetails);
 app.use("/customer-details", CustomerDetails);
 app.use("/rent-receipt", RentReceipt);
-app.use("/", BookVehicle);
 app.use("/rentType", RentType);
+app.use("/paymentVoucher", PaymentVoucher);
+app.use("/expenseVoucher", ExpenseVoucher);
 app.use("/vehicleMaintenance", VehicleMaintenance);
 
 // MongoDB connection function
