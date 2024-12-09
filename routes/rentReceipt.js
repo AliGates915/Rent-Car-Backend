@@ -9,7 +9,7 @@ import {
 
 const router = express.Router();
 
-router.post('/:id', createRentReceipt);             // Create Rent Receipt
+router.post('/', createRentReceipt);             // Create Rent Receipt
 router.get('/', getAllRentReceipt);             // Get All Rent Receipts
 router.get('/:id', getRentReceiptById);          // Get Rent Receipt by ID
 router.put('/:id', updateRentReceipt);           // Update Rent Receipt
