@@ -223,40 +223,44 @@ export const createReturnVehicle = async (req, res, next) => {
   // For save vehicle details
   export const createSaveVehicleForm = async (req, res) => {
     try {
-      const { date, time, balanceAmount, condition, rentReceiptId } = req.body;
-    
-      // Log incoming request data
-      console.log('Request Body:', req.body);
-  
-      // Validate data
-      if (!date || !time || !balanceAmount || !condition || !rentReceiptId) {
-          return res.status(400).json({ message: 'Missing required fields' });
-      }
-  
-      // Check if rentReceiptId is valid ObjectId
-      if (!mongoose.Types.ObjectId.isValid(rentReceiptId)) {
-          return res.status(400).json({ message: 'Invalid RentReceipt ID' });
-      }
-  
-    // Check if RentReceipt exists
-    const rentReceipt = await RentReceipt.findById(rentReceiptId);
-    if (!rentReceipt) {
-        return res.status(400).json({ message: "RentReceipt not found" });
-    }
+        const { date, time, balanceAmount, condition, rentReceiptId } = req.body;
 
-    // Now create the VehicleDetails document, where balanceAmount is the reference to RentReceipt
-    const newSaveVehicle = new VehicleDetails({
-        date,
-        time,
-        condition,
-        balanceAmount: rentReceipt._id,  // Save RentReceipt's ObjectId as balanceAmount
-    });
+        // Log incoming request data
+        console.log("Request Body:", req.body);
+
+        // Validate required fields
+        if (!date || !time || balanceAmount === undefined || !condition || !rentReceiptId) {
+            return res.status(400).json({ message: "Missing required fields" });
+        }
+
+        // Check if rentReceiptId is valid ObjectId
+        if (!mongoose.Types.ObjectId.isValid(rentReceiptId)) {
+            return res.status(400).json({ message: "Invalid RentReceipt ID" });
+        }
+
+        // Check if RentReceipt exists
+        const rentReceipt = await RentReceipt.findById(rentReceiptId);
+        if (!rentReceipt) {
+            return res.status(404).json({ message: "RentReceipt not found" });
+        }
+
+        // Create the VehicleDetails document
+        const newSaveVehicle = new VehicleDetails({
+            date,
+            time,
+            condition,
+            balanceAmount, // Store as a numeric value or string, depending on your schema
+            rentReceiptId: rentReceipt._id, // Explicitly reference RentReceipt
+        });
 
         await newSaveVehicle.save();
-        res.status(201).json({ message: "SaveVehicle created successfully", data: newSaveVehicle });
+        res.status(201).json({
+            message: "Vehicle details saved successfully",
+            data: newSaveVehicle,
+        });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Server Error" });
+        console.error("Error saving vehicle details:", error);
+        res.status(500).json({ message: "Internal Server Error" });
     }
 };
 
