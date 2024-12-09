@@ -91,6 +91,25 @@ export const getVehiclesDetails = async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 };
+export const getBookVehicle = async (req, res) => {
+    const { id } = req.params; // Extract the ID from the route parameters
+
+    try {
+        // Fetch vehicle details from the database using the ID
+        const vehicle = await VehicleDetails.findById(id);
+
+        // Check if the vehicle exists
+        if (!vehicle) {
+            return res.status(404).json({ message: 'Vehicle not found' });
+        }
+
+        // Return the vehicle data
+        res.status(200).json(vehicle);
+    } catch (error) {
+        console.error('Error fetching vehicle:', error);
+        res.status(500).json({ message: 'An error occurred while fetching vehicle details' });
+    }
+};
 export const getAllVehicleDetails = async (req, res) => {
   try {
     const vehicles = await VehicleDetails.find({isBooked: false});

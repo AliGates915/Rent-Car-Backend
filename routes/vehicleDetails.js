@@ -13,7 +13,8 @@ import {
   getVehiclesDetails,
   createSaveVehicle,
   createSaveVehicleById,
-  getAllVehicleDetailsDisplay
+  getAllVehicleDetailsDisplay,
+  getBookVehicle,
 } from "../controllers/vehicleDetails.js";
 // import { verifyAdmin } from '../utils/verifyToken.js';
 const router = express.Router();
@@ -34,8 +35,10 @@ router.delete("/:id", deleteVehicleDetails);
 router.get("/", getAllVehicleDetails);
 router.get("/display", getAllVehicleDetailsDisplay);
 router.get("/booking", getVehiclesDetails);
-
+// post a new booking vehicle
 router.post('/book-vehicle/:id', createBookVehicle)
+// get by id vehicle
+router.get('/book-vehicle/:id', getBookVehicle)
 router.get('/return-vehicle', getReturnVehicles)
 // No need
 router.post('/return-vehicle/:id', createReturnVehicle)

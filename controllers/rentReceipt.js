@@ -11,7 +11,6 @@ export const createRentReceipt = async (req, res, next) => {
 
     console.log("Next serialNo:", nextSerialNo); // Logs the next serial number
 
-
     // Create a new RentReceipt instance with the next serial number
     const newRentReceipt = new RentReceipt({
       ...req.body,
