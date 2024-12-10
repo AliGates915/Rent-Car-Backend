@@ -3,18 +3,21 @@ import RentReceipt from "../models/RentReceipt.js";
 // Create new customer details
 export const createRentReceipt = async (req, res, next) => {
   try {
-    // Get the last rent receipt's serial number, sorted by descending serialNo (ensure it's treated as a number)
+    const { id } = req.params; // Extract ID from the URL
+
+    // Get the last rent receipt's serial number, sorted by descending serialNo
     const lastSerialNo = await RentReceipt.findOne().sort({ serialNo: -1 });
 
     // Ensure serialNo is a number and calculate the next serialNo
-    const nextSerialNo = lastSerialNo  ? (lastSerialNo.serialNo) + 1 : 1; 
+    const nextSerialNo = lastSerialNo ? lastSerialNo.serialNo + 1 : 1;
 
     console.log("Next serialNo:", nextSerialNo); // Logs the next serial number
 
-    // Create a new RentReceipt instance with the next serial number
+    // Create a new RentReceipt instance with the specific ID and the next serial number
     const newRentReceipt = new RentReceipt({
       ...req.body,
       serialNo: nextSerialNo, // Automatically assign the next serialNo
+      rentReceiptId: id, // Use the specific ID for association
     });
 
     // Save to the database
@@ -28,6 +31,7 @@ export const createRentReceipt = async (req, res, next) => {
     });
   }
 };
+
 // Update
 export const updateRentReceipt = async (req, res, next) => {
   try {

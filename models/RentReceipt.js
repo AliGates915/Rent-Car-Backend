@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 
 // RentReceipt Schema
 const rentReceiptSchema = new mongoose.Schema({
+  rentReceiptId: { type: String, required: true },
   regDate: { type: Date, required: true },
   serialNo: { type: Number, required: true, unique: true },
   customerInfo: {
