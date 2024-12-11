@@ -102,7 +102,7 @@ export const getAllRentReceipt = async (req, res, next) => {
 // Get by ID
 export const getRentReceiptById = async (req, res, next) => {
   try {
-    const customer = await RentReceipt.findById(req.params.id);
+    const customer = await RentReceipt.findOne({ rentReceiptId: req.params.id });
     if (!customer) {
       return res.status(404).json({ message: "Customer not found" });
     }

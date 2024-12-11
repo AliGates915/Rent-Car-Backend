@@ -224,49 +224,51 @@ export const createReturnVehicle = async (req, res, next) => {
   // For save vehicle details
   export const createSaveVehicleForm = async (req, res) => {
     try {
-      const vehicleId = req.params.id;
-      const { date, time, balanceAmount, condition } = req.body;
+        const vehicleId = req.params.id;
+        const { date, time, balanceAmount, condition } = req.body;
 
-      // Validate request body
-      if (!req.body || Object.keys(req.body).length === 0) {
-          return res.status(400).json({ message: "Request body is missing or empty" });
-      }
+        // Validate request body
+        if (!req.body) {
+            return res.status(400).json({ message: "Request body is missing" });
+        }
+        if (!date) return res.status(400).json({ message: "Missing 'date' field" });
+        if (!time) return res.status(400).json({ message: "Missing 'time' field" });
+        if (balanceAmount === undefined)
+            return res.status(400).json({ message: "Missing 'balanceAmount' field" });
+        if (!condition) return res.status(400).json({ message: "Missing 'condition' field" });
 
-      // Validate required fields
-      if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-          return res.status(400).json({ message: "Invalid or missing 'date', expected format YYYY-MM-DD" });
-      }
-      if (!time || !/^\d{2}:\d{2}$/.test(time)) {
-          return res.status(400).json({ message: "Invalid or missing 'time', expected format HH:mm" });
-      }
-      if (balanceAmount === undefined || isNaN(parseFloat(balanceAmount))) {
-          return res.status(400).json({ message: "'balanceAmount' must be a valid number" });
-      }
-      if (!condition) {
-          return res.status(400).json({ message: "Missing 'condition' field" });
-      }
+        // Parse balanceAmount
+        const balanceAmountParsed = parseFloat(balanceAmount);
+        if (isNaN(balanceAmountParsed)) {
+            return res.status(400).json({ message: "'balanceAmount' must be a valid number" });
+        }
 
-      // Create new vehicle details
-      const newSaveVehicle = new VehicleDetails({
-          date,
-          time,
-          balanceAmount: parseFloat(balanceAmount),
-          condition,
-          isSaved: false, // Default can be moved to schema
-          isBooked: false, // Default can be moved to schema
-          status: "Available", // Default can be moved to schema
-          vehicleId,
-      });
-        // Save the document
-        await newSaveVehicle.save();
+        // Find and update vehicle details
+        const updatedVehicle = await VehicleDetails.findByIdAndUpdate(
+            vehicleId,
+            {   isSaved: false,
+                isBooked: false,
+                status: "Available",
+                date,
+                time,
+                balanceAmount: balanceAmountParsed,
+                condition,
+            },
+            { new: true } // Return the updated document
+        );
 
-        // Send response
-        res.status(201).json({
-            message: "Vehicle details saved successfully",
-            data: newSaveVehicle,
+        // Check if vehicle exists
+        if (!updatedVehicle) {
+            return res.status(404).json({ message: "Vehicle not found" });
+        }
+
+        // Respond with updated document
+        res.status(200).json({
+            message: "Vehicle details updated successfully",
+            data: updatedVehicle,
         });
     } catch (error) {
-        console.error("Error saving vehicle details:", error);
+        console.error("Error updating vehicle details:", error);
         res.status(500).json({ message: "Internal Server Error" });
     }
 };

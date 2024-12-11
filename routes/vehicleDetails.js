@@ -12,7 +12,7 @@ import {
   getAllSaves,
   getVehiclesDetails,
   createSaveVehicle,
-  // createSaveVehicleById,
+  createSaveVehicleById,
   getAllVehicleDetailsDisplay,
   getBookVehicle,
 } from "../controllers/vehicleDetails.js";
@@ -48,8 +48,8 @@ router.post('/return-vehicle/:id', createReturnVehicle)
 router.post('/save-return-vehicle/:id', createSaveVehicle)
 router.get('/saveVehicle', getAllSaves)
 
-router.patch('/save-form/:id', createSaveVehicleForm)
+router.post('/save-form/:id', createSaveVehicleForm)
 // both are false
-// router.post('/save-vehicle/:id', createSaveVehicleById) 
+router.post('/save-vehicle/:id', createSaveVehicleById) 
 
 export default router;
