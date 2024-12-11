@@ -1,7 +1,7 @@
 import mongoose from 'mongoose'
 
 const vehicleSchema = new mongoose.Schema({
-  registrationNo: { type: String, required: true },
+  registrationNo: { type: String, required: false },
   registeredCity: { type: String },
   carType: { type: String },
   carMake: { type: String  , required: true  [true, 'carMake is required'],},
@@ -60,15 +60,15 @@ const vehicleSchema = new mongoose.Schema({
   status: { type: String },
   condition: { type: String },
     balanceAmount: { 
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'RentReceipt',
+        type: Number,
     },
     isSaved: {
         type: Boolean,
         default: false,
     },
-    rentReceiptId: { type: mongoose.Schema.Types.ObjectId,
-       ref: 'RentReceipt'},
+    // rentReceiptId: { type: mongoose.Schema.Types.ObjectId,
+    //    ref: 'RentReceipt'
+    // },
 
 });
 

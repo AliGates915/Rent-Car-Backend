@@ -224,48 +224,39 @@ export const createReturnVehicle = async (req, res, next) => {
   // For save vehicle details
   export const createSaveVehicleForm = async (req, res) => {
     try {
-        const { date, time, balanceAmount, condition, rentReceiptId } = req.body;
+      const vehicleId = req.params.id;
+      const { date, time, balanceAmount, condition } = req.body;
 
-        // Log request details
-        console.log("Request Body:", req.body);
-        console.log("Request Params ID:", req.params.id);
+      // Validate request body
+      if (!req.body || Object.keys(req.body).length === 0) {
+          return res.status(400).json({ message: "Request body is missing or empty" });
+      }
 
-        // Check for missing request body
-        if (!req.body) {
-            return res.status(400).json({ message: "Request body is missing" });
-        }
+      // Validate required fields
+      if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+          return res.status(400).json({ message: "Invalid or missing 'date', expected format YYYY-MM-DD" });
+      }
+      if (!time || !/^\d{2}:\d{2}$/.test(time)) {
+          return res.status(400).json({ message: "Invalid or missing 'time', expected format HH:mm" });
+      }
+      if (balanceAmount === undefined || isNaN(parseFloat(balanceAmount))) {
+          return res.status(400).json({ message: "'balanceAmount' must be a valid number" });
+      }
+      if (!condition) {
+          return res.status(400).json({ message: "Missing 'condition' field" });
+      }
 
-        // Validate required fields
-        if (!date) return res.status(400).json({ message: "Missing 'date' field" });
-        if (!time) return res.status(400).json({ message: "Missing 'time' field" });
-        if (balanceAmount === undefined)
-            return res.status(400).json({ message: "Missing 'balanceAmount' field" });
-        if (!condition) return res.status(400).json({ message: "Missing 'condition' field" });
-        if (!rentReceiptId) return res.status(400).json({ message: "Missing 'rentReceiptId' field" });
-
-        // Validate ObjectId
-        if (!mongoose.Types.ObjectId.isValid(rentReceiptId)) {
-            return res.status(400).json({ message: "Invalid RentReceipt ID" });
-        }
-
-        // Validate RentReceipt existence
-        const rentReceipt = await RentReceipt.findById(rentReceiptId);
-        if (!rentReceipt) {
-            return res.status(404).json({ message: "RentReceipt not found" });
-        }
-
-        // Create new VehicleDetails
-        const newSaveVehicle = new VehicleDetails({
-            date,
-            time,
-            balanceAmount,
-            condition,
-            rentReceiptId,
-            isSaved: false,
-            isBooked: false,
-            status: "Available",
-        });
-
+      // Create new vehicle details
+      const newSaveVehicle = new VehicleDetails({
+          date,
+          time,
+          balanceAmount: parseFloat(balanceAmount),
+          condition,
+          isSaved: false, // Default can be moved to schema
+          isBooked: false, // Default can be moved to schema
+          status: "Available", // Default can be moved to schema
+          vehicleId,
+      });
         // Save the document
         await newSaveVehicle.save();
 
@@ -279,6 +270,8 @@ export const createReturnVehicle = async (req, res, next) => {
         res.status(500).json({ message: "Internal Server Error" });
     }
 };
+
+
 
 
 

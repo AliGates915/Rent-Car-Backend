@@ -18,7 +18,6 @@ export const createRentReceipt = async (req, res, next) => {
     // Create a new RentReceipt instance
     const newRentReceipt = new RentReceipt({
       ...req.body,
-      isBooked: true,
       serialNo: nextSerialNo,
       rentReceiptId: id,
     });
@@ -86,7 +85,7 @@ export const deleteRentReceipt = async (req, res, next) => {
 // DET All
 export const getAllRentReceipt = async (req, res, next) => {
   try {
-    const customers = await RentReceipt.find({isBooked: true});
+    const customers = await RentReceipt.find();
 
     if (customers.length === 0) {
       return res.status(200).json({ message: "No available vehicles found" });

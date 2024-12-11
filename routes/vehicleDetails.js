@@ -48,7 +48,7 @@ router.post('/return-vehicle/:id', createReturnVehicle)
 router.post('/save-return-vehicle/:id', createSaveVehicle)
 router.get('/saveVehicle', getAllSaves)
 
-router.post('/save-form/:id', createSaveVehicleForm)
+router.patch('/save-form/:id', createSaveVehicleForm)
 // both are false
 // router.post('/save-vehicle/:id', createSaveVehicleById) 
 

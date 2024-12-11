@@ -63,10 +63,6 @@ const rentReceiptSchema = new mongoose.Schema({
     advanceAmount: { type: Number },
     balanceAmount: { type: Number },
   },
-  isBooked: {
-    type: Boolean,
-    default: false,
-  },
 }, { timestamps: true });
 
 const RentReceipt = mongoose.model('RentReceipt', rentReceiptSchema);
