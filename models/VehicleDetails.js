@@ -68,7 +68,7 @@ const vehicleSchema = new mongoose.Schema({
         default: false,
     },
     rentReceiptId: { type: mongoose.Schema.Types.ObjectId,
-       ref: 'RentReceipt', required: true },
+       ref: 'RentReceipt'},
 
 });
 

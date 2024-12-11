@@ -3,28 +3,27 @@ import RentReceipt from "../models/RentReceipt.js";
 // Create new customer details
 export const createRentReceipt = async (req, res, next) => {
   try {
-    const { id } = req.params; // Extract ID from the URL
-    const { vehicleinfo } = req.body; // Access vehicle information from request body
-    const registrationNo = vehicleinfo?.registrationNo; // Safely extract registrationNo
+    const { id } = req.params;
 
-    // Get the last rent receipt's serial number, sorted by descending serialNo
+    if (!id) {
+      return res.status(400).json({ message: "Missing rentReceiptId in request" });
+    }
+
+    // Get the last rent receipt's serial number
     const lastSerialNo = await RentReceipt.findOne().sort({ serialNo: -1 });
-
-    // Ensure serialNo is a number and calculate the next serialNo
     const nextSerialNo = lastSerialNo ? lastSerialNo.serialNo + 1 : 1;
 
-    console.log("Next serialNo:", nextSerialNo); // Logs the next serial number
-
-    // Assign registrationNo as rentReceiptId
-    const rentReceiptId = registrationNo || id || "Default_Receipt_Id";
+    console.log("Next serialNo:", nextSerialNo);
 
     // Create a new RentReceipt instance
     const newRentReceipt = new RentReceipt({
       ...req.body,
       isBooked: true,
-      serialNo: nextSerialNo, // Automatically assign the next serialNo
-      rentReceiptId,          // Assign registrationNo or fallback as rentReceiptId
+      serialNo: nextSerialNo,
+      rentReceiptId: id,
     });
+
+    console.log("Rent Receipt Data:", newRentReceipt);
 
     // Save to the database
     const savedRentReceipt = await newRentReceipt.save();
@@ -37,6 +36,8 @@ export const createRentReceipt = async (req, res, next) => {
     });
   }
 };
+
+
 
 // Update
 export const updateRentReceipt = async (req, res, next) => {

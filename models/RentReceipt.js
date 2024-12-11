@@ -25,6 +25,7 @@ const rentReceiptSchema = new mongoose.Schema({
     engineCapacity: { type: String },
     chassisNo: { type: String },
     engineNo: { type: String },
+    photos: [String]
   },
   features: {
     airConditioner: { type: Boolean, default: false },
