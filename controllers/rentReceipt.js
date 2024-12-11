@@ -4,6 +4,8 @@ import RentReceipt from "../models/RentReceipt.js";
 export const createRentReceipt = async (req, res, next) => {
   try {
     const { id } = req.params; // Extract ID from the URL
+    const { vehicleinfo } = req.body; // Access vehicle information from request body
+    const registrationNo = vehicleinfo?.registrationNo; // Safely extract registrationNo
 
     // Get the last rent receipt's serial number, sorted by descending serialNo
     const lastSerialNo = await RentReceipt.findOne().sort({ serialNo: -1 });
@@ -13,11 +15,15 @@ export const createRentReceipt = async (req, res, next) => {
 
     console.log("Next serialNo:", nextSerialNo); // Logs the next serial number
 
-    // Create a new RentReceipt instance with the specific ID and the next serial number
+    // Assign registrationNo as rentReceiptId
+    const rentReceiptId = registrationNo || id || "Default_Receipt_Id";
+
+    // Create a new RentReceipt instance
     const newRentReceipt = new RentReceipt({
       ...req.body,
+      isBooked: true,
       serialNo: nextSerialNo, // Automatically assign the next serialNo
-      rentReceiptId: id, // Use the specific ID for association
+      rentReceiptId,          // Assign registrationNo or fallback as rentReceiptId
     });
 
     // Save to the database
@@ -79,7 +85,11 @@ export const deleteRentReceipt = async (req, res, next) => {
 // DET All
 export const getAllRentReceipt = async (req, res, next) => {
   try {
-    const customers = await RentReceipt.find();
+    const customers = await RentReceipt.find({isBooked: true});
+
+    if (customers.length === 0) {
+      return res.status(200).json({ message: "No available vehicles found" });
+    }
     res.status(200).json(customers);
   } catch (error) {
     console.error("Error fetching customer details:", error);

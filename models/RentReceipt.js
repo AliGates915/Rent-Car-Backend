@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 // RentReceipt Schema
 const rentReceiptSchema = new mongoose.Schema({
-  rentReceiptId: { type: String, required: true },
+  rentReceiptId: { type: String },
   regDate: { type: Date, required: true },
   serialNo: { type: Number, required: true, unique: true },
   customerInfo: {
@@ -61,6 +61,10 @@ const rentReceiptSchema = new mongoose.Schema({
     totalAmount: { type: Number },
     advanceAmount: { type: Number },
     balanceAmount: { type: Number },
+  },
+  isBooked: {
+    type: Boolean,
+    default: false,
   },
 }, { timestamps: true });
 
