@@ -1,3 +1,4 @@
+import multer from "multer";
 import express from "express";
 import {
   createVehicleDetails,
@@ -14,19 +15,49 @@ import {
   createSaveVehicle,
   createSaveVehicleById,
   getAllVehicleDetailsDisplay,
+  idVehicleDetails,
   getBookVehicle,
 } from "../controllers/vehicleDetails.js";
-// import { verifyAdmin } from '../utils/verifyToken.js';
+import path from 'path';
+
 const router = express.Router();
 
-// Create a new TourType
-router.post("/", createVehicleDetails);
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/'); // Directory for storing files
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname)); // Rename the file
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // Limit file size to 5MB
+  fileFilter: (req, file, cb) => {
+    const fileTypes = /jpeg|jpg|png/;
+    const extname = fileTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = fileTypes.test(file.mimetype);
+
+    if (extname && mimetype) {
+      return cb(null, true);
+    }
+    cb(new Error('Only images are allowed'));
+  },
+});
+
+// Define the route with `upload.array` middleware for multiple files
+router.post('/create', upload.array('photos', 10), createVehicleDetails);
 
 // Update an existing TourType by ID
 router.put("/:id", updateVehicleDetails);
 
 // Delete a TourType by ID
 router.delete("/:id", deleteVehicleDetails);
+
+// vehicle details by ID
+router.get("/:id", idVehicleDetails);
 
 // Get a specific TourType by ID
 // router.get("/:id", getVehicleDetails);

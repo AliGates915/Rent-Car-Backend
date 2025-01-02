@@ -1,5 +1,4 @@
 import VehicleDetails from "../models/VehicleDetails.js";
-import RentReceipt from '../models/RentReceipt.js';
 import mongoose from "mongoose";
 
 // Create VehicleType
@@ -49,6 +48,18 @@ export const updateVehicleDetails = async (req, res, next) => {
   }
 };
 
+// Get Vehicle Details by ID
+export const idVehicleDetails = async (req, res, next) => {
+  try {
+    const vehicleDetails = await VehicleDetails.findById(req.params.id);
+    if (!vehicleDetails) {
+      return res.status(404).json({ message: "Vehicle details not found" });
+    }
+    res.status(200).json({ message: "Vehicle details retrieved successfully", vehicleDetails });
+  } catch (error) {
+    next(error);
+  }
+};
 
 // Delete VehicleType
 export const deleteVehicleDetails = async (req, res, next) => {
@@ -91,6 +102,7 @@ export const getVehiclesDetails = async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 };
+
 export const getBookVehicle = async (req, res) => {
     const { id } = req.params; // Extract the ID from the route parameters
 
@@ -137,8 +149,6 @@ export const getAllVehicleDetailsDisplay = async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 };
-
-
 
 
 // Book vehicle 
@@ -188,7 +198,6 @@ export const getReturnVehicles = async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 };
-
 
 
 // Return the vehicle
