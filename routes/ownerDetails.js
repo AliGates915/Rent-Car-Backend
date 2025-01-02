@@ -3,6 +3,7 @@ import {
   createOwnerDetails,
   updateOwnerDetails,
   deleteOwnerDetails,
+  upload,
   getOwnerDetails,
   getAllOwnerDetails,
 } from '../controllers/ownerDetails.js';
@@ -10,7 +11,7 @@ import {
 const router = express.Router();
 
 // Create a new OwnerDetails
-router.post('/', createOwnerDetails);
+router.post('/',upload.single("photo"), createOwnerDetails);
 
 // Update OwnerDetails by ID
 router.put('/:id', updateOwnerDetails);

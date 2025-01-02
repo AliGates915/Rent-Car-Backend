@@ -4,13 +4,14 @@ import {
   getAllCustomerDetails,
   getCustomerDetailsById,
   updateCustomerDetails,
+  upload,
   deleteCustomerDetails,
 } from "../controllers/customerDetails.js";
 
 const router = express.Router();
 
 // Create new customer
-router.post("/", createCustomerDetails);
+router.post("/", upload.single("photo"), createCustomerDetails);
 
 // Get all customers
 router.get("/", getAllCustomerDetails);

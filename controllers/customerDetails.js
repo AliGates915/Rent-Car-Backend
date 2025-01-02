@@ -1,26 +1,65 @@
+import multer from "multer";
+import path from "path";
 import CustomerDetails from "../models/CustomerDetails.js";
+
+// Configure Multer for single photo uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "uploads/"); // Directory for storing files
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname)); // Rename file with a timestamp
+  },
+});
+
+export const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // Limit file size to 5MB
+  fileFilter: (req, file, cb) => {
+    const fileTypes = /jpeg|jpg|png/;
+    const extname = fileTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = fileTypes.test(file.mimetype);
+
+    if (extname && mimetype) {
+      return cb(null, true);
+    }
+    cb(new Error("Only images are allowed"));
+  },
+});
 
 // Create new customer details
 export const createCustomerDetails = async (req, res, next) => {
   try {
-    // Get the last ownerCode and increment it
-    const lastCustomer = await CustomerDetails.findOne().sort({ ownerCode: -1 });
-    const nextOwnerCode = lastCustomer ? lastCustomer.ownerCode + 1 : 1;
+    // Get the last customerCode and increment it
+    const lastCustomer = await CustomerDetails.findOne().sort({ customerCode: -1 });
+    const nextCustomerCode = lastCustomer ? lastCustomer.customerCode + 1 : 1;
+
+    // Check if a photo was uploaded
+    const photo = req.file ? req.file.path : null;
 
     // Create a new instance of CustomerDetails
     const newCustomer = new CustomerDetails({
       ...req.body,
-      ownerCode: nextOwnerCode, // Automatically assign the next ownerCode
+      customerCode: nextCustomerCode, // Automatically assign the next customerCode
+      totalTransactions: 0, // Initialize totalTransactions to 0
+      photo, // Add the photo path
     });
-    newCustomer.totalTransactions = 0;
-    // Save to database
+
+    // Save to the database
     const savedCustomer = await newCustomer.save();
-    res.status(201).json(savedCustomer);
+    res.status(201).json({
+      message: "Customer created successfully",
+      customerDetails: savedCustomer,
+    });
   } catch (error) {
     console.error("Error creating customer details:", error);
-    res.status(500).json({ message: "Failed to create customer details", error: error.message });
+    res.status(500).json({
+      message: "Failed to create customer details",
+      error: error.message,
+    });
   }
 };
+
 // Update
 export const updateCustomerDetails = async (req, res, next) => {
     try {

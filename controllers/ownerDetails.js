@@ -1,9 +1,39 @@
 import OwnerDetails from "../models/OwnerDetails.js";
+import multer from "multer";
+import path from "path";
+
+// Configure Multer for single photo uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "uploads/"); // Directory for storing files
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname)); // Rename file
+  },
+});
+
+export const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // Limit file size to 5MB
+  fileFilter: (req, file, cb) => {
+    const fileTypes = /jpeg|jpg|png/;
+    const extname = fileTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = fileTypes.test(file.mimetype);
+
+    if (extname && mimetype) {
+      return cb(null, true);
+    }
+    cb(new Error("Only images are allowed"));
+  },
+});
 
 // Create a new Owner
 export const createOwnerDetails = async (req, res, next) => {
   try {
     const { ownerName, vehicle } = req.body;
+
+    // Check if a photo was uploaded
+    const photo = req.file ? req.file.path : null;
 
     // Check if the owner already exists
     let existingOwner = await OwnerDetails.findOne({ ownerName });
@@ -27,17 +57,21 @@ export const createOwnerDetails = async (req, res, next) => {
       const lastOwner = await OwnerDetails.findOne().sort({ ownerCode: -1 });
       const nextOwnerCode = lastOwner ? lastOwner.ownerCode + 1 : 1;
 
-      // Create a new OwnerDetails instance with 1 vehicle
+      // Create a new OwnerDetails instance
       const newOwner = new OwnerDetails({
         ...req.body,
         ownerCode: nextOwnerCode,
         totalVehicles: 1, // Start with 1 vehicle
         vehicles: vehicle ? [vehicle] : [], // Add the vehicle if provided
+        photo, // Add the photo path
       });
 
       // Save the new owner to the database
       const savedOwner = await newOwner.save();
-      res.status(201).json(savedOwner);
+      res.status(201).json({
+        message: "Owner created successfully",
+        ownerDetails: savedOwner,
+      });
     }
   } catch (error) {
     console.error("Error creating owner details:", error);
@@ -47,6 +81,7 @@ export const createOwnerDetails = async (req, res, next) => {
     });
   }
 };
+
 
 
 // Update OwnerDetails by ID
