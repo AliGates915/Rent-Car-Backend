@@ -48,7 +48,7 @@ const upload = multer({
 });
 
 // Define the route with `upload.array` middleware for multiple files
-router.post('/create', upload.array('photos', 10), createVehicleDetails);
+router.post('/', upload.array('photos', 10), createVehicleDetails);
 
 // Update an existing TourType by ID
 router.put("/:id", updateVehicleDetails);
