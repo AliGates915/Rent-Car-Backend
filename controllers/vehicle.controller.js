@@ -16,7 +16,8 @@ export const createVehicle = (req, res) => {
     engine_capacity,
     seating_capacity,
     location,
-
+    owner_id,
+    owner_percentage,
     air_conditioner,
     heater,
     sunroof,
@@ -33,9 +34,9 @@ export const createVehicle = (req, res) => {
       rate_per_day, color, transmission_type, fuel_type,
       engine_capacity, seating_capacity, location,
       air_conditioner, heater, sunroof, android,
-      front_camera, rear_camera, status
+      front_camera, rear_camera, status, owner_id, owner_percentage
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   db.query(
@@ -50,6 +51,8 @@ export const createVehicle = (req, res) => {
       color,
       transmission_type,
       fuel_type,
+       owner_id,
+    owner_percentage,
       engine_capacity,
       seating_capacity,
       location,
@@ -81,6 +84,92 @@ export const createVehicle = (req, res) => {
       }
 
       res.json({ message: "Vehicle created successfully" });
+    }
+  );
+};
+
+// Update Vehicle
+export const updateVehicle = (req, res) => {
+  const { id } = req.params;
+
+  const {
+    car_type,
+    car_make,
+    car_model,
+    year_of_model,
+    rate_per_day,
+    color,
+     owner_id,
+    owner_percentage,
+    transmission_type,
+    fuel_type,
+    engine_capacity,
+    seating_capacity,
+    location,
+    air_conditioner,
+    heater,
+    sunroof,
+    android,
+    front_camera,
+    rear_camera,
+    status,
+  } = req.body;
+
+  const sql = `
+    UPDATE vehicles SET
+      car_type=?,
+      car_make=?,
+      car_model=?,
+      year_of_model=?,
+      rate_per_day=?,
+      color=?,
+      owner_id=?,
+      owner_percentage=?,
+      transmission_type=?,
+      fuel_type=?,
+      engine_capacity=?,
+      seating_capacity=?,
+      location=?,
+      air_conditioner=?,
+      heater=?,
+      sunroof=?,
+      android=?,
+      front_camera=?,
+      rear_camera=?,
+      status=?
+    WHERE id=?
+  `;
+
+  db.query(
+    sql,
+    [
+      car_type,
+      car_make,
+      car_model,
+      year_of_model,
+      rate_per_day,
+      owner_id,
+      owner_percentage,
+    
+      color,
+      transmission_type,
+      fuel_type,
+      engine_capacity,
+      seating_capacity,
+      location,
+      air_conditioner || 0,
+      heater || 0,
+      sunroof || 0,
+      android || 0,
+      front_camera || 0,
+      rear_camera || 0,
+      status,
+      id,
+    ],
+    (err) => {
+      if (err) return res.status(500).json(err);
+
+      res.json({ message: "Vehicle updated successfully" });
     }
   );
 };
@@ -138,84 +227,7 @@ export const getVehicles = (req, res) => {
 };
 
 
-// Update Vehicle
-export const updateVehicle = (req, res) => {
-  const { id } = req.params;
 
-  const {
-    car_type,
-    car_make,
-    car_model,
-    year_of_model,
-    rate_per_day,
-    color,
-    transmission_type,
-    fuel_type,
-    engine_capacity,
-    seating_capacity,
-    location,
-    air_conditioner,
-    heater,
-    sunroof,
-    android,
-    front_camera,
-    rear_camera,
-    status,
-  } = req.body;
-
-  const sql = `
-    UPDATE vehicles SET
-      car_type=?,
-      car_make=?,
-      car_model=?,
-      year_of_model=?,
-      rate_per_day=?,
-      color=?,
-      transmission_type=?,
-      fuel_type=?,
-      engine_capacity=?,
-      seating_capacity=?,
-      location=?,
-      air_conditioner=?,
-      heater=?,
-      sunroof=?,
-      android=?,
-      front_camera=?,
-      rear_camera=?,
-      status=?
-    WHERE id=?
-  `;
-
-  db.query(
-    sql,
-    [
-      car_type,
-      car_make,
-      car_model,
-      year_of_model,
-      rate_per_day,
-      color,
-      transmission_type,
-      fuel_type,
-      engine_capacity,
-      seating_capacity,
-      location,
-      air_conditioner || 0,
-      heater || 0,
-      sunroof || 0,
-      android || 0,
-      front_camera || 0,
-      rear_camera || 0,
-      status,
-      id,
-    ],
-    (err) => {
-      if (err) return res.status(500).json(err);
-
-      res.json({ message: "Vehicle updated successfully" });
-    }
-  );
-};
 
 
 // Get Single Vehicle

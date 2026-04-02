@@ -14,8 +14,9 @@ const storage = new CloudinaryStorage({
   cloudinary,
   params: {
     folder: 'rent-cars',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-    transformation: [{ width: 800, height: 800, crop: 'limit' }],
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'pdf', 'docx'],
+    transformation: [{ width: 800, height: 800, crop: 'limit' }], 
+    
   },
 });
 

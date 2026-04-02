@@ -5,6 +5,7 @@ export const db = mysql.createConnection({
   user: "root",
   password: "", // default XAMPP
   database: "car_rental_system",
+  
 });
 
 db.connect((err) => {
