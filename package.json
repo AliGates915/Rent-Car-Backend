@@ -11,16 +11,22 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@google-cloud/vision": "^5.3.5",
+    "axios": "^1.14.0",
     "bcryptjs": "^3.0.3",
     "body-parser": "^2.2.2",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "fs": "^0.0.1-security",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "multer-storage-cloudinary": "^4.0.0",
     "mysql2": "^3.20.0",
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.14",
+    "path": "^0.12.7",
+    "sharp": "^0.34.5",
+    "tesseract.js": "^7.0.0"
   }
 }
