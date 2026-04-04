@@ -200,8 +200,12 @@ export const uploadCustomerDocument = async (req, res) => {
   try {
     const { customer_id } = req.params;
     const { document_type } = req.body;
-    const file = req.file;
 
+    const file = req.file;
+    
+
+    // console.log("File ", file);
+    
       if (!file) {
       return res.status(400).json({ message: "File required" });
     }
@@ -212,9 +216,10 @@ export const uploadCustomerDocument = async (req, res) => {
       return res.status(400).json({ message: fileError });
     }
 
+    const fileUrl = file.secure_url || file.url;
 
     // Use file.path (Cloudinary URL) for OCR validation
-    const validationResult = await validateDocument(file.path, document_type);
+    const validationResult = await validateDocument(fileUrl, document_type);
     
     let rejectionReason = null;
     let isValid = false;
@@ -256,7 +261,7 @@ export const uploadCustomerDocument = async (req, res) => {
         db.query(
           updateSql,
           [
-            file.path,
+            fileUrl,
             file.filename,
             isValid ? 1 : 0,
             rejectionReason,
@@ -287,7 +292,7 @@ export const uploadCustomerDocument = async (req, res) => {
           [
             customer_id,
             document_type,
-            file.path,
+            fileUrl,
             file.filename,
             isValid ? 1 : 0,
             rejectionReason,

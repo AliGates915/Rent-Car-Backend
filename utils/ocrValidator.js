@@ -3,6 +3,21 @@ import sharp from "sharp";
 import path from "path";
 import fs from "fs";
 import axios from "axios";
+import vision from "@google-cloud/vision";
+
+const visionClient = new vision.ImageAnnotatorClient({
+  keyFilename: path.join("config", "google-vision.json"),
+});
+
+const extractTextWithGoogle = async (imagePath) => {
+  try {
+    const [result] = await visionClient.textDetection(imagePath);
+    return result.textAnnotations[0]?.description || "";
+  } catch (err) {
+    console.log("❌ Google OCR Error:", err);
+    return "";
+  }
+};
 
 // ----------------------------
 // 📥 DOWNLOAD IMAGE
@@ -51,8 +66,7 @@ const fail = (reason) => ({
   reason,
 });
 
-const hasAny = (text, words) =>
-  words.some((w) => text.includes(w));
+const hasAny = (text, words) => words.some((w) => text.includes(w));
 
 // ----------------------------
 // 🟢 FILE VALIDATION
@@ -77,8 +91,10 @@ export const validateFile = (file) => {
 export const validateDocument = async (fileUrl, type) => {
   let tempPath = null;
   let processedPath = null;
-    console.log("Type", type);
-    
+
+  // console.log("FILE:", req.file);
+  // console.log("FILE URL:", fileUrl);
+
   try {
     const fileName = `temp_${Date.now()}.jpg`;
     tempPath = path.join("temp", fileName);
@@ -93,30 +109,35 @@ export const validateDocument = async (fileUrl, type) => {
     // 🧠 preprocess
     processedPath = await preprocessImage(tempPath);
 
-    // 🔍 OCR TRY
     let text = "";
     let confidence = 0;
 
-    try {
+    if (type === "cnic_back") {
+      text = await extractTextWithGoogle(processedPath);
+      text = text.toLowerCase();
+      confidence = 95;
+    }
+    if (type === "cnic_front") {
+      text = await extractTextWithGoogle(processedPath);
+      text = text.toLowerCase();
+      confidence = 95;
+    } else {
       const result = await Tesseract.recognize(processedPath, "eng");
       text = result.data.text.toLowerCase();
       confidence = result.data.confidence;
-    } catch (err) {
-      console.log("⚠️ OCR failed → fallback mode");
-      return fail("Invalid or unrecognized document");
     }
 
     const wordCount = text.split(/\s+/).length;
 
-    console.log("OCR TEXT:", text);
-    console.log("Confidence:", confidence);
+    // console.log("OCR TEXT:", text);
+    // console.log("Confidence:", confidence);
 
     // ----------------------------
     // 🔥 LOW TEXT (DON'T BLOCK USER)
     // ----------------------------
-   if (!text || wordCount < 5) {
-  return fail("Low readable text");
-}
+    if (!text || wordCount < 5) {
+      return fail("Low readable text");
+    }
 
     // ----------------------------
     // 🔥 DOCUMENT VALIDATION
@@ -160,9 +181,8 @@ export const validateDocument = async (fileUrl, type) => {
     // ----------------------------
     return {
       isValid: false,
-      reason: "Unclear document (allowed, review recommended)",
+      reason: "Invalid document",
     };
-
   } catch (err) {
     console.error("OCR ERROR:", err);
 
@@ -173,7 +193,8 @@ export const validateDocument = async (fileUrl, type) => {
   } finally {
     try {
       if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-      if (processedPath && fs.existsSync(processedPath)) fs.unlinkSync(processedPath);
+      if (processedPath && fs.existsSync(processedPath))
+        fs.unlinkSync(processedPath);
     } catch {}
   }
 };
@@ -182,19 +203,31 @@ export const validateDocument = async (fileUrl, type) => {
 // 🔵 CNIC FRONT
 // ----------------------------
 const validateCNICFront = (text) => {
-  const hasNumber =
-    /\d{5}-\d{7}-\d/.test(text) || /\d{13}/.test(text);
+  const normalized = text
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .trim();
 
-  const english = [
+  // console.log("CNIC FRONT TEXT:", normalized);
+
+  // 🔢 CNIC NUMBER
+  const hasNumber =
+    /\d{5}-\d{7}-\d/.test(normalized) ||
+    /\d{13}/.test(normalized);
+
+  // 🔤 KEYWORDS (flexible)
+  const keywords = [
     "pakistan",
     "identity",
+    "identlty",   // OCR error tolerance
     "national",
     "card",
     "name",
     "father",
+    "husband",
   ];
 
-  const urdu = [
+  const urduKeywords = [
     "پاکستان",
     "شناختی",
     "قومی",
@@ -202,11 +235,20 @@ const validateCNICFront = (text) => {
     "نام",
     "ولد",
   ];
+const hasDOB = normalized.includes("birth") || normalized.includes("تاریخ");
 
-  const hasEnglish = hasAny(text, english);
-  const hasUrdu = hasAny(text, urdu);
 
-  if (hasNumber && (hasEnglish || hasUrdu)) {
+  const matchScore =
+    keywords.filter(k => normalized.includes(k)).length +
+    urduKeywords.filter(k => normalized.includes(k)).length;
+
+
+  // console.log("Match Score:", matchScore);
+
+
+
+  // 🔥 FINAL RULE
+  if (hasNumber && matchScore >= 3 && hasDOB) {
     return success();
   }
 
@@ -217,65 +259,37 @@ const validateCNICFront = (text) => {
 // 🔵 CNIC BACK
 // ----------------------------
 const validateCNICBack = (text) => {
-  const hasNumber =
-    /\d{5}-\d{7}-\d/.test(text) || /\d{13}/.test(text);
+  const normalized = text
+    .replace(/\s+/g, " ")
+    .replace(/[^\u0600-\u06FF\s]/g, "") // only Urdu
+    .trim();
 
-  if (hasNumber) return success();
+  // console.log("Logs:", normalized);
 
-  const english = ["pakistan", "national", "address"];
-  const urdu = ["پاکستان", "شناختی", "کارڈ", "پتہ"];
+  const requiredWords = ["گمشدہ", "کارڈ", "ملنے", "لیٹر", "بکس", "ڈال"];
 
-  if (hasAny(text, english) || hasAny(text, urdu)) {
-    return success();
-  }
+  const matchCount = requiredWords.filter((word) =>
+    normalized.includes(word),
+  ).length;
+
+  if (matchCount >= 4) return success();
 
   return fail("Invalid CNIC Back");
 };
-
 // ----------------------------
 // 🔵 DRIVING LICENSE
 // ----------------------------
 const validateLicense = (text) => {
-  // 🔥 KEYWORDS (STRONG)
   const hasLicenseWords =
-    text.includes("driving") &&
-    text.includes("license");
+    hasAny(text, ["driving"]) && hasAny(text, ["license", "licence"]);
 
-   
-    
-  // 🔥 AUTHORITY CHECK (VERY IMPORTANT)
-  const hasAuthority =
-    text.includes("traffic police") ||
-    text.includes("licensing authority");
+  const hasAuthority = hasAny(text, ["traffic police", "licensing authority"]);
 
-  // 🔥 PROVINCE
-  const hasProvince =
-    text.includes("punjab") ||
-    text.includes("sindh") ||
-    text.includes("kpk") ||
-    text.includes("balochistan");
+  const hasProvince = hasAny(text, ["punjab", "sindh", "kpk", "balochistan"]);
 
-  // 🔥 STRUCTURE CHECK (NEW)
-  const hasFields =
-    text.includes("name") ||
-    text.includes("cnic") ||
-    text.includes("birth") ||
-    text.includes("issue") ||
-    text.includes("expiry");
+  const hasFields = hasAny(text, ["name", "cnic", "birth", "issue", "expiry"]);
 
-
-    // console.log("hasLicenseWords ", hasLicenseWords);
-    // console.log("hasAuthority ", hasAuthority);
-    // console.log("hasProvince ", hasProvince);
-    // console.log("hasFields ", hasFields);
-    
-  // 🔥 FINAL LOGIC
-  if (
-    hasLicenseWords &&
-    hasAuthority &&
-    hasProvince &&
-    hasFields
-  ) {
+  if (hasLicenseWords && hasAuthority && hasProvince && hasFields) {
     return success();
   }
 
