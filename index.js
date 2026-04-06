@@ -1,8 +1,10 @@
+// backend/server.js or app.js
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import authRoutes from "./routes/auth.routes.js";
 import vehicleRoutes from "./routes/vehicle.routes.js";
+// IMPORTANT: Remove these individual routes since they'll be handled by the generic setup routes
 import vehicleTypeRoutes from "./routes/Setup/vehicleType.routes.js";
 import maintenanceTypeRoutes from "./routes/Setup/maintenanceType.routes.js";
 import rentTypeRoutes from "./routes/Setup/rentType.routes.js";
@@ -27,9 +29,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Register dynamic setup routes (these will handle all setup types)
+
+
+// Other routes
 app.use("/api/auth", authRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/vehicles", vehicleRoutes);
+
 app.use("/api/vehicle-types", vehicleTypeRoutes);
 app.use("/api/maintenance-types", maintenanceTypeRoutes);
 app.use("/api/rent-types", rentTypeRoutes);
@@ -46,6 +53,7 @@ app.use("/api/owner-earnings", ownerEarningRoutes);
 app.use("/api/owners", ownerRoutes);
 app.use("/api/daybook", dayBook);
 
-app.listen(5000, () => {
-  console.log("🚀 Server running on port 5000");
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });

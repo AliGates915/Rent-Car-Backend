@@ -4,13 +4,13 @@ import {
   getOwners,
   updateOwner,
   getOwnerById,
-  deleteOwner,
-  uploadOwnerCNIC,
-  uploadOwnerDrivingLicense
+  getOwnerDocuments,
+  deleteOwner,uploadOwnerDocument,
+  checkOwnerDocumentsComplete
 } from "../../controllers/Owner/owner.controller.js";
 import { protect } from "../../middlewares/auth.middleware.js";
 import { uploadOwnerDocuments } from "../../middlewares/upload.middleware.js";
-
+import upload from "../../middlewares/upload.middleware.js";
 const router = express.Router();
 
 // Owner CRUD
@@ -21,17 +21,15 @@ router.put("/:id", protect, uploadOwnerDocuments, updateOwner);
 router.delete("/:id", protect, deleteOwner);
 
 // Document Upload Routes
+// DOCUMENTS
 router.post(
-  "/:id/upload-cnic",
+  "/:owner_id/documents",
   protect,
-  uploadOwnerDocuments,
-  uploadOwnerCNIC
+  upload.single("images"),
+  uploadOwnerDocument
 );
-router.post(
-  "/:id/upload-driving-license",
-  protect,
-  uploadOwnerDocuments,
-  uploadOwnerDrivingLicense
-);
+
+router.get("/:owner_id/documents", protect, getOwnerDocuments);
+router.get("/:owner_id/documents/status", protect, checkOwnerDocumentsComplete);
 
 export default router;

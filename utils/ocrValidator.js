@@ -11,14 +11,19 @@ const visionClient = new vision.ImageAnnotatorClient({
 
 const extractTextWithGoogle = async (imagePath) => {
   try {
-    const [result] = await visionClient.textDetection(imagePath);
+    const [result] = await visionClient.textDetection({
+      image: { source: { filename: imagePath } },
+      imageContext: {
+        languageHints: ["ur", "en"], // 🔥 IMPORTANT
+      },
+    });
+
     return result.textAnnotations[0]?.description || "";
   } catch (err) {
     console.log("❌ Google OCR Error:", err);
     return "";
   }
 };
-
 // ----------------------------
 // 📥 DOWNLOAD IMAGE
 // ----------------------------
@@ -45,8 +50,8 @@ const preprocessImage = async (imagePath) => {
   const processedPath = imagePath.replace(".jpg", "_processed.jpg");
 
   await sharp(imagePath)
-    .grayscale()
-    .normalize()
+    .resize(1200) // 🔥 improve OCR
+    .modulate({ brightness: 1.2, saturation: 1.3 })
     .sharpen()
     .toFile(processedPath);
 
@@ -65,6 +70,74 @@ const fail = (reason) => ({
   isValid: false,
   reason,
 });
+
+
+const hasBarcodeLikePattern = async (imagePath) => {
+  const { data, info } = await sharp(imagePath)
+    .greyscale()
+    .resize(1200)
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const width = info.width;
+  const height = info.height;
+
+  // sirf bottom area scan karo (barcode wahi hota hai)
+  const startY = Math.floor(height * 0.7);
+
+  let transitions = 0;
+
+  for (let y = startY; y < height; y += 5) {
+    let prev = null;
+
+    for (let x = 0; x < width; x++) {
+      const val = data[y * width + x];
+
+      const current = val < 100 ? 1 : 0;
+
+      if (prev !== null && prev !== current) {
+        transitions++;
+      }
+
+      prev = current;
+    }
+  }
+
+  return {
+    hasBarcode: transitions > 500, // tweak if needed
+    transitions,
+  };
+};
+
+
+const detectGreenDominance = async (imagePath) => {
+  const { data, info } = await sharp(imagePath)
+    .resize(300)
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  let greenish = 0;
+
+  for (let i = 0; i < data.length; i += 3) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+
+    if (g > r + 10 && g > b + 10) {
+      greenish++;
+    }
+  }
+
+  const total = info.width * info.height;
+  const ratio = greenish / total;
+
+  return {
+    isGreenish: ratio > 0.2,
+    ratio,
+  };
+};
+
+
 
 const hasAny = (text, words) => words.some((w) => text.includes(w));
 
@@ -92,8 +165,8 @@ export const validateDocument = async (fileUrl, type) => {
   let tempPath = null;
   let processedPath = null;
 
-  // console.log("FILE:", req.file);
-  // console.log("FILE URL:", fileUrl);
+  console.log("FILE:", type);
+  console.log("FILE URL:", fileUrl);
 
   try {
     const fileName = `temp_${Date.now()}.jpg`;
@@ -122,15 +195,12 @@ export const validateDocument = async (fileUrl, type) => {
       text = text.toLowerCase();
       confidence = 95;
     } else {
-      const result = await Tesseract.recognize(processedPath, "eng");
+      const result = await Tesseract.recognize(processedPath, "urd+eng");
       text = result.data.text.toLowerCase();
       confidence = result.data.confidence;
     }
 
     const wordCount = text.split(/\s+/).length;
-
-    // console.log("OCR TEXT:", text);
-    // console.log("Confidence:", confidence);
 
     // ----------------------------
     // 🔥 LOW TEXT (DON'T BLOCK USER)
@@ -148,7 +218,7 @@ export const validateDocument = async (fileUrl, type) => {
     }
 
     if (type === "cnic_back") {
-      const result = validateCNICBack(text);
+      const result = await validateCNICBack(processedPath, text);
       if (result.isValid) return result;
     }
 
@@ -203,23 +273,19 @@ export const validateDocument = async (fileUrl, type) => {
 // 🔵 CNIC FRONT
 // ----------------------------
 const validateCNICFront = (text) => {
-  const normalized = text
-    .replace(/\s+/g, " ")
-    .toLowerCase()
-    .trim();
+  const normalized = text.replace(/\s+/g, " ").toLowerCase().trim();
 
   // console.log("CNIC FRONT TEXT:", normalized);
 
   // 🔢 CNIC NUMBER
   const hasNumber =
-    /\d{5}-\d{7}-\d/.test(normalized) ||
-    /\d{13}/.test(normalized);
+    /\d{5}-\d{7}-\d/.test(normalized) || /\d{13}/.test(normalized);
 
   // 🔤 KEYWORDS (flexible)
   const keywords = [
     "pakistan",
     "identity",
-    "identlty",   // OCR error tolerance
+    "identlty", // OCR error tolerance
     "national",
     "card",
     "name",
@@ -227,25 +293,14 @@ const validateCNICFront = (text) => {
     "husband",
   ];
 
-  const urduKeywords = [
-    "پاکستان",
-    "شناختی",
-    "قومی",
-    "کارڈ",
-    "نام",
-    "ولد",
-  ];
-const hasDOB = normalized.includes("birth") || normalized.includes("تاریخ");
-
+  const urduKeywords = ["پاکستان", "شناختی", "قومی", "کارڈ", "نام", "ولد"];
+  const hasDOB = normalized.includes("birth") || normalized.includes("تاریخ");
 
   const matchScore =
-    keywords.filter(k => normalized.includes(k)).length +
-    urduKeywords.filter(k => normalized.includes(k)).length;
+    keywords.filter((k) => normalized.includes(k)).length +
+    urduKeywords.filter((k) => normalized.includes(k)).length;
 
-
-  // console.log("Match Score:", matchScore);
-
-
+  console.log("Match Score:", matchScore);
 
   // 🔥 FINAL RULE
   if (hasNumber && matchScore >= 3 && hasDOB) {
@@ -258,24 +313,34 @@ const hasDOB = normalized.includes("birth") || normalized.includes("تاریخ")
 // ----------------------------
 // 🔵 CNIC BACK
 // ----------------------------
-const validateCNICBack = (text) => {
-  const normalized = text
-    .replace(/\s+/g, " ")
-    .replace(/[^\u0600-\u06FF\s]/g, "") // only Urdu
-    .trim();
+const validateCNICBack = async (imagePath, text) => {
+  let score = 0;
 
-  // console.log("Logs:", normalized);
+  const hasNumber =
+    /\d{5}-\d{7}-\d/.test(text) ||
+    /\d{13}/.test(text);
 
-  const requiredWords = ["گمشدہ", "کارڈ", "ملنے", "لیٹر", "بکس", "ڈال"];
+  if (hasNumber) score += 15;
 
-  const matchCount = requiredWords.filter((word) =>
-    normalized.includes(word),
-  ).length;
+  const barcode = await hasBarcodeLikePattern(imagePath);
+  // console.log("BARCODE:", barcode);
 
-  if (matchCount >= 4) return success();
+  if (barcode.hasBarcode) score += 40;
+
+  const green = await detectGreenDominance(imagePath);
+  // console.log("GREEN:", green);
+
+  if (green.isGreenish) score += 20;
+
+  if (text.length > 20) score += 5;
+
+  console.log("FINAL SCORE:", score);
+
+  if (score >= 50) return success();
 
   return fail("Invalid CNIC Back");
 };
+
 // ----------------------------
 // 🔵 DRIVING LICENSE
 // ----------------------------

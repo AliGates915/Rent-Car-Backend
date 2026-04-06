@@ -415,141 +415,225 @@ export const deleteOwner = (req, res) => {
 };
 
 
-// ====================== UPLOAD CNIC ======================
-export const uploadOwnerCNIC = async (req, res) => {
-  const { id } = req.params;
-  const { side } = req.body;
+// Owner Document Controller
 
-  if (!req.files || !req.files.document) {
-    return res.status(400).json({ message: "No file uploaded" });
-  }
 
-  const file = req.files.document[0];
-  const fileUrl = file.path || file.secure_url;
-
+export const uploadOwnerDocument = async (req, res) => {
   try {
-    // OCR Validation
-    const ocrResult = await validateDocument(fileUrl, 'cnic');
+    const { owner_id } = req.params;
+    const { document_type } = req.body;
+    const file = req.file;
+    // console.log("req body ", req.body);
+    // console.log("req. url ", file);
     
-    let updateFields = [];
-    let updateValues = [];
+    
 
-    if (side === 'front') {
-      updateFields.push("cnic_front_url = ?");
-    } else {
-      updateFields.push("cnic_back_url = ?");
-    }
-    updateValues.push(fileUrl);
-
-    if (ocrResult.isValid) {
-      updateFields.push("cnic_is_verified = ?");
-      updateValues.push(true);
-      updateFields.push("cnic_extracted_data = ?");
-      updateValues.push(JSON.stringify(ocrResult.data));
-      updateFields.push("cnic_rejection_reason = ?");
-      updateValues.push(null);
-    } else {
-      updateFields.push("cnic_is_verified = ?");
-      updateValues.push(false);
-      updateFields.push("cnic_rejection_reason = ?");
-      updateValues.push(ocrResult.errors.join(", "));
+    if (!file) {
+      return res.status(400).json({ message: "File required" });
     }
 
-    updateFields.push("updated_at = NOW()");
-    updateValues.push(id);
+    // Combine type and side for full document type
+    let fullDocumentType = document_type;
+   
 
-    const sql = `UPDATE vehicle_owners SET ${updateFields.join(", ")} WHERE id = ?`;
+    // FILE VALIDATION
+    const fileError = validateFile(file);
+    if (fileError) {
+      return res.status(400).json({ message: fileError });
+    }
 
-    db.query(sql, updateValues, (err, result) => {
-      if (err) {
-        console.error("Database error:", err);
-        return res.status(500).json({ message: "Database error", error: err });
-      }
+    const fileUrl = file.secure_url || file.url;
+    const publicId = file.filename;
 
-      if (result.affectedRows === 0) {
+    // Validate document based on type
+    const validationResult = await validateDocument(fileUrl, document_type);
+    
+    // return;
+
+
+    let rejectionReason = null;
+    let isValid = false;
+
+    if (validationResult.isValid) {
+      isValid = true;
+    } else {
+      isValid = false;
+      rejectionReason = validationResult.reason || "OCR validation failed - document text doesn't match requirements";
+    }
+
+    // Check if owner exists
+    const checkOwnerSql = `SELECT id, cnic_no FROM vehicle_owners WHERE id = ?`;
+    
+    db.query(checkOwnerSql, [owner_id], async (err, ownerResult) => {
+      if (err) return res.status(500).json(err);
+      
+      if (ownerResult.length === 0) {
         return res.status(404).json({ message: "Owner not found" });
       }
 
-      res.json({
-        message: `${side.toUpperCase()} CNIC uploaded ${ocrResult.isValid ? 'and verified' : 'but validation failed'}`,
-        isValid: ocrResult.isValid,
-        fileUrl: fileUrl,
-        errors: ocrResult.errors,
-        extractedData: ocrResult.data
+      const owner = ownerResult[0];
+
+      // Check if document already exists
+      const checkDocSql = `
+        SELECT id, public_id FROM owner_documents 
+        WHERE owner_id = ? AND document_type = ?
+      `;
+      
+      db.query(checkDocSql, [owner_id, fullDocumentType], async (err, docResult) => {
+        if (err) return res.status(500).json(err);
+
+        // If document exists, delete old file from Cloudinary
+        if (docResult.length > 0 && docResult[0].public_id) {
+          try {
+            await cloudinary.uploader.destroy(docResult[0].public_id);
+          } catch (cloudinaryError) {
+            console.error("Error deleting old file from Cloudinary:", cloudinaryError);
+          }
+        }
+
+        const extractedDataJSON = JSON.stringify(validationResult.extractedText || {});
+
+        if (docResult.length > 0) {
+          // Update existing document
+          const updateSql = `
+            UPDATE owner_documents
+            SET file_url = ?,
+                public_id = ?,
+                is_verified = ?,
+                rejection_reason = ?,
+                extracted_data = ?,
+                updated_at = NOW()
+            WHERE id = ?
+          `;
+
+          db.query(
+            updateSql,
+            [fileUrl, publicId, isValid ? 1 : 0, rejectionReason, extractedDataJSON, docResult[0].id],
+            (err) => {
+              if (err) return res.status(500).json(err);
+
+              // Update CNIC number in main table if it's a CNIC document and validation passed
+              if (document_type === 'cnic' && isValid && validationResult.extractedText?.cnic_number) {
+                const updateCnicSql = `UPDATE vehicle_owners SET cnic_no = ? WHERE id = ?`;
+                db.query(updateCnicSql, [validationResult.extractedText.cnic_number, owner_id]);
+              }
+
+              res.json({
+                success: true,
+                message: isValid ? "Document uploaded & verified" : "Document uploaded but rejected",
+                verified: isValid,
+                rejectionReason: rejectionReason,
+                extractedText: validationResult.extractedText,
+                documentType: fullDocumentType
+              });
+            }
+          );
+        } else {
+          // Insert new document
+          const insertSql = `
+            INSERT INTO owner_documents
+            (owner_id, document_type, file_url, public_id, is_verified, rejection_reason, extracted_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+          `;
+
+          db.query(
+            insertSql,
+            [owner_id, fullDocumentType, fileUrl, publicId, isValid ? 1 : 0, rejectionReason, extractedDataJSON],
+            (err, result) => {
+              if (err) {
+                console.error("Insert error:", err);
+                return res.status(500).json({ message: "Database error", error: err.message });
+              }
+
+              // Update CNIC number in main table if it's a CNIC document and validation passed
+              if (document_type === 'cnic' && isValid && validationResult.extractedText?.cnic_number) {
+                const updateCnicSql = `UPDATE vehicle_owners SET cnic_no = ? WHERE id = ?`;
+                db.query(updateCnicSql, [validationResult.extractedText.cnic_number, owner_id]);
+              }
+
+              res.json({
+                success: true,
+                message: isValid ? "Document uploaded & verified" : "Document uploaded but rejected",
+                verified: isValid,
+                rejectionReason: rejectionReason,
+                extractedText: validationResult.extractedText,
+                documentType: fullDocumentType
+              });
+            }
+          );
+        }
       });
     });
   } catch (error) {
     console.error("Upload error:", error);
-    res.status(500).json({ message: "Error processing upload", error: error.message });
+    res.status(500).json({ message: error.message });
   }
 };
 
-// ====================== UPLOAD DRIVING LICENSE ======================
-export const uploadOwnerDrivingLicense = async (req, res) => {
-  const { id } = req.params;
-  const { side } = req.body;
 
-  if (!req.files || !req.files.document) {
-    return res.status(400).json({ message: "No file uploaded" });
-  }
+export const getOwnerDocuments = (req, res) => {
+  const { owner_id } = req.params;
 
-  const file = req.files.document[0];
-  const fileUrl = file.path || file.secure_url;
+  const sql = `
+    SELECT * FROM owner_documents
+    WHERE owner_id = ?
+    ORDER BY id DESC
+  `;
 
-  try {
-    // OCR Validation
-    const ocrResult = await validateDocument(fileUrl, 'license');
+  db.query(sql, [owner_id], (err, rows) => {
+    if (err) return res.status(500).json(err);
+
+    res.json(rows);
+  });
+};
+
+
+// Function to check if both CNIC sides are uploaded and verified
+export const checkOwnerDocumentsComplete = (req, res) => {
+  const { owner_id } = req.params;
+
+  const sql = `
+    SELECT 
+      cnic_front_url,
+      cnic_back_url,
+      cnic_is_verified,
+      driving_license_front_url,
+      driving_license_back_url,
+      driving_license_is_verified
+    FROM vehicle_owners
+    WHERE id = ?
+  `;
+
+  db.query(sql, [owner_id], (err, rows) => {
+    if (err) return res.status(500).json(err);
     
-    let updateFields = [];
-    let updateValues = [];
-
-    if (side === 'front') {
-      updateFields.push("driving_license_front_url = ?");
-    } else {
-      updateFields.push("driving_license_back_url = ?");
-    }
-    updateValues.push(fileUrl);
-
-    if (ocrResult.isValid) {
-      updateFields.push("driving_license_is_verified = ?");
-      updateValues.push(true);
-      updateFields.push("driving_license_extracted_data = ?");
-      updateValues.push(JSON.stringify(ocrResult.data));
-      updateFields.push("driving_license_rejection_reason = ?");
-      updateValues.push(null);
-    } else {
-      updateFields.push("driving_license_is_verified = ?");
-      updateValues.push(false);
-      updateFields.push("driving_license_rejection_reason = ?");
-      updateValues.push(ocrResult.errors.join(", "));
+    if (rows.length === 0) {
+      return res.status(404).json({ message: "Owner not found" });
     }
 
-    updateFields.push("updated_at = NOW()");
-    updateValues.push(id);
+    const owner = rows[0];
+    
+    const cnicComplete = owner.cnic_front_url && owner.cnic_back_url;
+    const cnicVerified = owner.cnic_is_verified === 1;
+    const licenseComplete = owner.driving_license_front_url && owner.driving_license_back_url;
+    const licenseVerified = owner.driving_license_is_verified === 1;
 
-    const sql = `UPDATE vehicle_owners SET ${updateFields.join(", ")} WHERE id = ?`;
-
-    db.query(sql, updateValues, (err, result) => {
-      if (err) {
-        console.error("Database error:", err);
-        return res.status(500).json({ message: "Database error", error: err });
-      }
-
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ message: "Owner not found" });
-      }
-
-      res.json({
-        message: `${side.toUpperCase()} Driving License uploaded ${ocrResult.isValid ? 'and verified' : 'but validation failed'}`,
-        isValid: ocrResult.isValid,
-        fileUrl: fileUrl,
-        errors: ocrResult.errors,
-        extractedData: ocrResult.data
-      });
+    res.json({
+      cnic: {
+        front_uploaded: !!owner.cnic_front_url,
+        back_uploaded: !!owner.cnic_back_url,
+        complete: cnicComplete,
+        verified: cnicVerified,
+        status: cnicComplete && cnicVerified ? 'complete' : (cnicComplete ? 'pending_verification' : 'incomplete')
+      },
+      driving_license: {
+        front_uploaded: !!owner.driving_license_front_url,
+        back_uploaded: !!owner.driving_license_back_url,
+        complete: licenseComplete,
+        verified: licenseVerified,
+        status: licenseComplete && licenseVerified ? 'complete' : (licenseComplete ? 'pending_verification' : 'incomplete')
+      },
+      all_complete: (cnicComplete && cnicVerified) && (licenseComplete && licenseVerified)
     });
-  } catch (error) {
-    console.error("Upload error:", error);
-    res.status(500).json({ message: "Error processing upload", error: error.message });
-  }
+  });
 };
-

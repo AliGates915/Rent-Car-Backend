@@ -28,12 +28,22 @@ export const createMaintenanceType = (req, res) => {
 
 // GET ALL
 export const getMaintenanceTypes = (req, res) => {
-  db.query("SELECT * FROM vehicle_maintenance_types", (err, rows) => {
+  const { search = '' } = req.query;
+  
+  let query = "SELECT * FROM vehicle_maintenance_types";
+  const params = [];
+  
+  if (search) {
+    query += " WHERE name LIKE ? OR description LIKE ?";
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  
+  db.query(query, params, (err, rows) => {
     if (err) return res.status(500).json(err);
-
     res.json(rows);
   });
 };
+
 
 // UPDATE
 export const updateMaintenanceType = (req, res) => {

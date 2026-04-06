@@ -17,12 +17,54 @@ export const createVehicleType = (req, res) => {
 
 // GET ALL
 export const getVehicleTypes = (req, res) => {
-  db.query("SELECT * FROM vehicle_types", (err, rows) => {
-    if (err) return res.status(500).json(err);
-
-    res.json(rows);
+  const { page = 1, limit = 10, search = '', status = '' } = req.query;
+  const offset = (page - 1) * limit;
+  
+  let query = "SELECT * FROM vehicle_types WHERE 1=1";
+  const params = [];
+  
+  // Add search condition
+  if (search) {
+    query += " AND (name LIKE ? OR description LIKE ?)";
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  
+  // Add status filter
+  if (status) {
+    query += " AND status = ?";
+    params.push(status);
+  }
+  
+  // Get total count
+  const countQuery = query.replace('SELECT *', 'SELECT COUNT(*) as total');
+  db.query(countQuery, params, (err, countResult) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    
+    const total = countResult[0].total;
+    
+    // Get paginated results
+    query += " ORDER BY created_at DESC LIMIT ? OFFSET ?";
+    db.query(query, [...params, parseInt(limit), parseInt(offset)], (err, rows) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      res.json({
+        success: true,
+        data: rows,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          totalPages: Math.ceil(total / limit)
+        }
+      });
+    });
   });
 };
+
 
 // GET BY ID
 export const getVehicleTypeById = (req, res) => {
