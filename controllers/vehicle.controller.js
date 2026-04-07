@@ -294,6 +294,7 @@ export const getVehicles = (req, res) => {
       if (!vehiclesMap[row.id]) {
         vehiclesMap[row.id] = {
           id: row.id,
+          owner_id: row.owner_id,
           registration_no: row.registration_no,
           car_type: row.car_type,
           car_make: row.car_make,
@@ -335,6 +336,28 @@ export const getVehicles = (req, res) => {
   });
 };
 
+// Get Available Vehicles
+export const getVehiclesforBooking = (req, res) => {
+  const sql = `
+    SELECT *
+    FROM vehicles
+    WHERE status = 'available'
+    ORDER BY id DESC
+  `;
+
+  db.query(sql, (err, results) => {
+    if (err) {
+      console.error("❌ Error fetching available vehicles:", err);
+      return res.status(500).json({ message: "Server Error" });
+    }
+
+    res.status(200).json({
+      success: true,
+      count: results.length,
+      data: results,
+    });
+  });
+};
 
 // Get Single Vehicle
 export const getVehicleById = (req, res) => {

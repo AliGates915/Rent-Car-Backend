@@ -8,6 +8,7 @@ import {
   getVehicleDocuments,
   createVehicleDocument,
   updateVehicleDocument,
+  getVehiclesforBooking,
   deleteVehicleDocument
 } from "../controllers/vehicle.controller.js";
 
@@ -28,6 +29,7 @@ router.post(
 
 // GET
 router.get("/", protect, getVehicles);
+router.get("/free", protect, getVehiclesforBooking);
 router.get("/:id", protect, getVehicleById);
 
 // UPDATE
