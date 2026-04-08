@@ -5,7 +5,8 @@ import {
   getReturns, 
   getReturnById, 
   updateReturn, 
-  deleteReturn 
+  deleteReturn,
+  getPendingReturns
 } from "../../controllers/Return_Vehicle/return.controller.js";
 import { protect } from "../../middlewares/auth.middleware.js";
 
@@ -13,6 +14,7 @@ const router = express.Router();
 
 // GET routes
 router.get("/", protect, getReturns);
+router.get("/pending", protect, getPendingReturns);
 router.get("/:id", protect, getReturnById);
 
 // POST routes

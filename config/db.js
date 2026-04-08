@@ -5,6 +5,8 @@ export const db = mysql.createConnection({
   user: "root",
   password: "", // default XAMPP
   database: "car_rental_system",
+  timezone: '+05:00', // Force Pakistan timezone (UTC+5)
+  dateStrings: true,  // Return dates as strings instead of Date objects
   
 });
 

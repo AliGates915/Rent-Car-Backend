@@ -182,6 +182,8 @@ export const updateBooking = (req, res) => {
     dropoff_city,
     advance_amount = 0,
     security_deposit = 0,
+    status,
+    payment_status,
   } = req.body;
 
   if (!date_from || !date_to) {
@@ -203,8 +205,41 @@ export const updateBooking = (req, res) => {
       });
     }
 
-    const cleanDateFrom = date_from.split("T")[0];
-    const cleanDateTo = date_to.split("T")[0];
+    // Helper function to ensure date is YYYY-MM-DD without timezone conversion
+    const formatToLocalDate = (dateValue) => {
+      if (!dateValue) return null;
+      
+      // If it's already in YYYY-MM-DD format, return as is
+      if (typeof dateValue === 'string' && dateValue.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        return dateValue;
+      }
+      
+      // If it's a Date object or ISO string, convert to local date
+      const date = new Date(dateValue);
+      if (isNaN(date.getTime())) return null;
+      
+      // Use UTC methods to prevent timezone shift
+      const year = date.getUTCFullYear();
+      const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(date.getUTCDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    // Format dates - keep them as local dates without timezone conversion
+    let cleanDateFrom = date_from;
+    let cleanDateTo = date_to;
+    
+    // Remove any time component if present
+    if (cleanDateFrom.includes('T')) cleanDateFrom = cleanDateFrom.split('T')[0];
+    if (cleanDateTo.includes('T')) cleanDateTo = cleanDateTo.split('T')[0];
+
+    // Get old dates in consistent format
+    const oldDateFrom = formatToLocalDate(oldBooking.date_from);
+    const oldDateTo = formatToLocalDate(oldBooking.date_to);
+
+    if (!cleanDateFrom || !cleanDateTo) {
+      return res.status(400).json({ message: "Invalid date format" });
+    }
 
     const start = new Date(cleanDateFrom);
     const end = new Date(cleanDateTo);
@@ -213,7 +248,9 @@ export const updateBooking = (req, res) => {
       return res.status(400).json({ message: "Invalid date range" });
     }
 
-    const days = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+    // Calculate days (difference in days + 1)
+    const diffTime = Math.abs(end - start);
+    const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
 
     const vehicleSql = `
       SELECT v.rate_per_day, b.vehicle_id
@@ -228,33 +265,12 @@ export const updateBooking = (req, res) => {
       const rate = Number(vehicle[0].rate_per_day);
       const vehicle_id = vehicle[0].vehicle_id;
 
-      // 🔥 availability check
-      const checkSql = `
-        SELECT id FROM bookings 
-        WHERE vehicle_id = ?
-        AND id != ?
-        AND status IN ('confirmed','ongoing')
-        AND NOT (date_to < ? OR date_from > ?)
-      `;
+      const performUpdate = () => {
+        const new_total = rate * days;
+        const old_total = Number(oldBooking.total_amount);
+        const diff = new_total - old_total;
 
-      db.query(
-        checkSql,
-        [vehicle_id, id, date_from, date_to],
-        (err, existing) => {
-          if (err) return res.status(500).json(err);
-
-          if (existing.length > 0) {
-            return res.status(400).json({
-              message: "Vehicle not available",
-            });
-          }
-
-          const new_total = rate * days;
-          const old_total = Number(oldBooking.total_amount);
-
-          const diff = new_total - old_total; // 🔥 IMPORTANT
-
-          const updateSql = `
+        const updateSql = `
           UPDATE bookings
           SET 
             date_from=?,
@@ -265,97 +281,231 @@ export const updateBooking = (req, res) => {
             total_amount=?,
             advance_amount=?,
             security_deposit=?,
+            status=?,
+            payment_status=?,
             updated_at = NOW()
           WHERE id=?
         `;
 
-          db.query(
-            updateSql,
-            [
-              cleanDateFrom,
-              cleanDateTo,
-              pickup_city,
-              dropoff_city,
-              days,
-              new_total,
-              advance_amount,
-              security_deposit,
-              id,
-            ],
-            (err2) => {
-              if (err2) return res.status(500).json(err2);
+        const finalStatus = status || oldBooking.status;
+        const finalPaymentStatus = payment_status || oldBooking.payment_status;
 
-              // 🔥 update customer balance ONLY DIFF
+        db.query(
+          updateSql,
+          [
+            cleanDateFrom,
+            cleanDateTo,
+            pickup_city,
+            dropoff_city,
+            days,
+            new_total,
+            advance_amount,
+            security_deposit,
+            finalStatus,
+            finalPaymentStatus,
+            id,
+          ],
+          (err2) => {
+            if (err2) {
+              console.error('Update error:', err2);
+              return res.status(500).json({ message: "Database update failed", error: err2 });
+            }
+
+            if (diff !== 0) {
               db.query(
                 `UPDATE customers SET balance = balance + ? WHERE id=?`,
                 [diff, oldBooking.customer_id],
+                (err3) => {
+                  if (err3) console.error('Balance update error:', err3);
+                }
               );
-              addLedgerEntry({
-  entry_type: "booking",
-  reference_id: id,  // Use the booking ID from params
-  reference_table: "bookings",
-  customer_id: oldBooking.customer_id,  // Use from oldBooking
-  vehicle_id: vehicle_id,
-  credit: diff > 0 ? diff : 0,  // Only add positive differences
-  debit: diff < 0 ? Math.abs(diff) : 0,  // Handle reductions
-  description: `Booking ${oldBooking.booking_code} updated - amount adjustment`,
-});
+              
+              if (typeof addLedgerEntry === 'function') {
+                addLedgerEntry({
+                  entry_type: "booking",
+                  reference_id: id,
+                  reference_table: "bookings",
+                  customer_id: oldBooking.customer_id,
+                  vehicle_id: vehicle_id,
+                  credit: diff > 0 ? diff : 0,
+                  debit: diff < 0 ? Math.abs(diff) : 0,
+                  description: `Booking ${oldBooking.booking_code} updated - amount adjustment`,
+                });
+              }
+            }
 
-              res.json({
-                message: "Booking updated successfully",
-                old_total,
-                new_total,
-                difference: diff,
+            // Return the dates in local format
+            res.json({
+              message: "Booking updated successfully",
+              old_total,
+              new_total,
+              difference: diff,
+              status: finalStatus,
+              payment_status: finalPaymentStatus,
+              total_days: days,
+              date_from: cleanDateFrom,
+              date_to: cleanDateTo
+            });
+          }
+        );
+      };
+
+      // Check availability ONLY if dates changed
+      const datesChanged = cleanDateFrom !== oldDateFrom || cleanDateTo !== oldDateTo;
+      
+      if (datesChanged) {
+        const checkSql = `
+          SELECT id FROM bookings 
+          WHERE vehicle_id = ?
+          AND id != ?
+          AND status IN ('confirmed', 'ongoing')
+          AND NOT (date_to < ? OR date_from > ?)
+        `;
+
+        db.query(
+          checkSql,
+          [vehicle_id, id, cleanDateFrom, cleanDateTo],
+          (err, existing) => {
+            if (err) {
+              console.error('Availability check error:', err);
+              return res.status(500).json({ message: "Error checking availability" });
+            }
+
+            if (existing && existing.length > 0) {
+              return res.status(400).json({
+                message: "Vehicle not available for selected dates",
               });
-            },
-          );
-        },
-      );
+            }
+            performUpdate();
+          }
+        );
+      } else {
+        performUpdate();
+      }
     });
   });
 };
 
-// ====================== GET ALL BOOKINGS ======================
-export const getBookings = (req, res) => {
-  const sql = `
+
+
+// Add this new function to get confirmed bookings
+export const getConfirmedBookings = (req, res) => {
+  const { search } = req.query;
+  
+  let sql = `
     SELECT 
-      b.*,
-      v.registration_no,
+      b.id,
+      b.booking_code,
+      b.date_from,
+      b.date_to,
+      b.total_amount,
+      b.advance_amount,
+      b.status,
+      c.id as customer_id,
+      c.customer_name,
+      v.id as vehicle_id,
       v.car_make,
       v.car_model,
-      c.customer_name as customer_name,
-      c.phone_no as customer_phone,
-      GROUP_CONCAT(
-        CONCAT(
-          '{"url":"', vi.image_url, '","public_id":"', vi.public_id, '"}'
-        )
-      ) as images
+      v.registration_no,
+      v.rate_per_day
     FROM bookings b
-    JOIN vehicles v ON b.vehicle_id = v.id
     JOIN customers c ON b.customer_id = c.id
-    LEFT JOIN vehicle_images vi ON v.id = vi.vehicle_id
-    GROUP BY b.id
-    ORDER BY b.id DESC
+    JOIN vehicles v ON b.vehicle_id = v.id
+    WHERE b.status = 'confirmed'
   `;
-
-  db.query(sql, (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+  
+  const queryParams = [];
+  
+  // Add search filter if provided
+  if (search) {
+    sql += ` AND (b.booking_code LIKE ? OR c.customer_name LIKE ? OR v.registration_no LIKE ?)`;
+    const searchPattern = `%${search}%`;
+    queryParams.push(searchPattern, searchPattern, searchPattern);
+  }
+  
+  sql += ` ORDER BY b.date_from ASC`;
+  
+  db.query(sql, queryParams, (err, results) => {
+    if (err) {
+      console.error('Error fetching confirmed bookings:', err);
+      return res.status(500).json({ message: 'Database error', error: err });
+    }
     
-    const formatted = rows.map((b) => ({
-      ...b,
-      images: b.images ? JSON.parse(`[${b.images}]`) : [],
-      // Format dates for frontend
-      date_from: b.date_from,
-      date_to: b.date_to,
-      // Ensure numeric values
-      total_amount: parseFloat(b.total_amount),
-      advance_amount: parseFloat(b.advance_amount),
-      paid_amount: parseFloat(b.paid_amount),
-      security_deposit: parseFloat(b.security_deposit),
-      rate_per_day: parseFloat(b.rate_per_day)
-    }));
+    res.json(results);
+  });
+};
 
-    res.json(formatted);
+// Update the existing getBookings function to handle status filter
+export const getBookings = (req, res) => {
+  const { page = 1, limit = 10, search, status } = req.query;
+  const offset = (page - 1) * limit;
+  
+  let sql = `
+    SELECT 
+      b.*,
+      c.customer_name,
+      v.id as vehicle_id,
+      v.car_make,
+      v.car_model,
+      v.registration_no,
+      v.rate_per_day
+    FROM bookings b
+    JOIN customers c ON b.customer_id = c.id
+    JOIN vehicles v ON b.vehicle_id = v.id
+    WHERE 1=1
+  `;
+  
+  const queryParams = [];
+  
+  // Add status filter if provided
+  if (status) {
+    sql += ` AND b.status = ?`;
+    queryParams.push(status);
+  }
+  
+  // Add search filter if provided
+  if (search) {
+    sql += ` AND (b.booking_code LIKE ? OR c.customer_name LIKE ? OR v.registration_no LIKE ?)`;
+    const searchPattern = `%${search}%`;
+    queryParams.push(searchPattern, searchPattern, searchPattern);
+  }
+  
+  sql += ` ORDER BY b.created_at DESC LIMIT ? OFFSET ?`;
+  queryParams.push(parseInt(limit), offset);
+  
+  db.query(sql, queryParams, (err, results) => {
+    if (err) {
+      console.error('Error fetching bookings:', err);
+      return res.status(500).json({ message: 'Database error', error: err });
+    }
+    
+    // Get total count for pagination
+    let countSql = `SELECT COUNT(*) as total FROM bookings b WHERE 1=1`;
+    const countParams = [];
+    
+    if (status) {
+      countSql += ` AND status = ?`;
+      countParams.push(status);
+    }
+    
+    if (search) {
+      countSql += ` AND (booking_code LIKE ?)`;
+      countParams.push(`%${search}%`);
+    }
+    
+    db.query(countSql, countParams, (err, countResult) => {
+      if (err) {
+        console.error('Error counting bookings:', err);
+        return res.status(500).json({ message: 'Database error', error: err });
+      }
+      
+      res.json({
+        data: results,
+        total: countResult[0].total,
+        page: parseInt(page),
+        limit: parseInt(limit)
+      });
+    });
   });
 };
 
