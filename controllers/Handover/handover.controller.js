@@ -4,20 +4,22 @@ export const createHandover = (req, res) => {
     const {
         booking_id,
         vehicle_id,
-        handed_over_by,
+        handed_over_by,  // Now this will be a string name
+        handover_date,
+        handover_time,
         km_out,
         fuel_level_out,
         vehicle_out_notes,
         customer_signature_url,
         staff_signature_url,
-        accessories, // array
+        accessories,
     } = req.body;
 
-    // 🔍 Step 1: check booking exists + status confirmed
+    // Check booking exists + status confirmed
     const checkBooking = `
-    SELECT * FROM bookings 
-    WHERE id = ? AND status = 'confirmed'
-  `;
+        SELECT * FROM bookings 
+        WHERE id = ? AND status = 'confirmed'
+    `;
 
     db.query(checkBooking, [booking_id], (err, bookingResult) => {
         if (err) return res.status(500).json(err);
@@ -28,21 +30,23 @@ export const createHandover = (req, res) => {
             });
         }
 
-        // 🚗 Step 2: insert handover
+        // Insert handover with separate date and time
         const insertHandover = `
-      INSERT INTO vehicle_handover
-      (booking_id, vehicle_id, handed_over_by, handover_datetime,
-       km_out, fuel_level_out, vehicle_out_notes,
-       customer_signature_url, staff_signature_url)
-      VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?)
-    `;
+            INSERT INTO vehicle_handover
+            (booking_id, vehicle_id, handed_over_by, handover_date, handover_time,
+             km_out, fuel_level_out, vehicle_out_notes,
+             customer_signature_url, staff_signature_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
 
         db.query(
             insertHandover,
             [
                 booking_id,
                 vehicle_id,
-                handed_over_by,
+                handed_over_by,  // Now this is a string name
+                handover_date,
+                handover_time,
                 km_out,
                 fuel_level_out,
                 vehicle_out_notes,
@@ -54,7 +58,7 @@ export const createHandover = (req, res) => {
 
                 const handover_id = result.insertId;
 
-                // 🧰 Step 3: insert accessories (optional)
+                // Insert accessories
                 if (accessories && accessories.length > 0) {
                     const values = accessories.map((acc) => [
                         handover_id,
@@ -64,21 +68,19 @@ export const createHandover = (req, res) => {
                     ]);
 
                     const insertAccessories = `
-            INSERT INTO vehicle_handover_accessories
-            (handover_id, accessory_type_id, is_given, remarks)
-            VALUES ?
-          `;
+                        INSERT INTO vehicle_handover_accessories
+                        (handover_id, accessory_type_id, is_given, remarks)
+                        VALUES ?
+                    `;
 
                     db.query(insertAccessories, [values], (err) => {
                         if (err) return res.status(500).json(err);
-
                         updateStatus();
                     });
                 } else {
                     updateStatus();
                 }
 
-                // 🔁 Step 4: update booking + vehicle
                 function updateStatus() {
                     db.query(
                         `UPDATE bookings SET status='ongoing' WHERE id=?`,
@@ -95,19 +97,24 @@ export const createHandover = (req, res) => {
                                     res.json({
                                         message: "Vehicle handed over successfully",
                                         handover_id,
+                                        handover_date,
+                                        handover_time,
+                                        handed_over_by: handed_over_by
                                     });
-                                },
+                                }
                             );
-                        },
+                        }
                     );
                 }
-            },
+            }
         );
     });
 };
 
+
+
 export const getHandovers = (req, res) => {
-    const { page = 1, limit = 10, search, status="ongoing" } = req.query;
+    const { page = 1, limit = 10, search, status = "ongoing" } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
     
     let sql = `
@@ -116,7 +123,8 @@ export const getHandovers = (req, res) => {
             vh.booking_id,
             vh.vehicle_id,
             vh.handed_over_by,
-            vh.handover_datetime,
+            vh.handover_date,
+            vh.handover_time,
             vh.km_out,
             vh.fuel_level_out,
             vh.vehicle_out_notes,
@@ -161,13 +169,11 @@ export const getHandovers = (req, res) => {
     
     const queryParams = [];
     
-    // Add status filter if provided
     if (status && status !== 'all') {
         sql += ` AND b.status = ?`;
         queryParams.push(status);
     }
     
-    // Add search filter if provided
     if (search) {
         sql += ` AND (
             b.booking_code LIKE ? OR 
@@ -180,9 +186,8 @@ export const getHandovers = (req, res) => {
         queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
     }
     
-    sql += ` ORDER BY vh.handover_datetime DESC`;
+    sql += ` ORDER BY vh.handover_date DESC, vh.handover_time DESC`;
     
-    // Add pagination if not fetching all records
     if (limit !== 'all') {
         sql += ` LIMIT ? OFFSET ?`;
         queryParams.push(parseInt(limit), offset);
@@ -197,20 +202,20 @@ export const getHandovers = (req, res) => {
             });
         }
         
-        // Process and format the data
         const formattedRows = rows.map(row => ({
             id: row.id,
             booking_id: row.booking_id,
             vehicle_id: row.vehicle_id,
             handed_over_by: row.handed_over_by,
-            handover_datetime: row.handover_datetime,
+            handover_date: row.handover_date,
+            handover_time: row.handover_time,
+            handover_datetime: `${row.handover_date} ${row.handover_time}`, // Combined for compatibility
             km_out: parseInt(row.km_out) || 0,
             fuel_level_out: row.fuel_level_out,
             vehicle_out_notes: row.vehicle_out_notes,
             customer_signature_url: row.customer_signature_url,
             staff_signature_url: row.staff_signature_url,
             
-            // Vehicle details
             registration_no: row.registration_no,
             car_make: row.car_make,
             car_model: row.car_model,
@@ -220,7 +225,6 @@ export const getHandovers = (req, res) => {
             transmission_type: row.transmission_type,
             fuel_type: row.fuel_type,
             
-            // Booking details
             booking_code: row.booking_code,
             booking_status: row.booking_status,
             total_days: row.total_days,
@@ -230,25 +234,20 @@ export const getHandovers = (req, res) => {
             date_from: row.date_from,
             date_to: row.date_to,
             
-            // Customer details
             customer_name: row.customer_name,
             customer_phone: row.customer_phone,
             customer_cnic: row.customer_cnic,
             
-            // Images will be fetched separately
             images: null
         }));
         
-        // Fetch images separately for each handover
+        // Fetch images (same as before)
         if (formattedRows.length > 0) {
             const vehicleIds = [...new Set(formattedRows.map(row => row.vehicle_id))];
             
             if (vehicleIds.length > 0) {
                 const imageSql = `
-                    SELECT 
-                        vehicle_id,
-                        image_url,
-                        public_id
+                    SELECT vehicle_id, image_url, public_id
                     FROM vehicle_images
                     WHERE vehicle_id IN (?)
                     ORDER BY vehicle_id, id ASC
@@ -256,7 +255,6 @@ export const getHandovers = (req, res) => {
                 
                 db.query(imageSql, [vehicleIds], (imgErr, images) => {
                     if (!imgErr && images) {
-                        // Group images by vehicle_id
                         const imagesByVehicle = {};
                         images.forEach(img => {
                             if (!imagesByVehicle[img.vehicle_id]) {
@@ -268,13 +266,11 @@ export const getHandovers = (req, res) => {
                             });
                         });
                         
-                        // Attach images to rows
                         formattedRows.forEach(row => {
                             row.images = imagesByVehicle[row.vehicle_id] || [];
                             row.image_url = row.images[0]?.url || null;
                         });
                     }
-                    
                     sendResponse(formattedRows);
                 });
             } else {
@@ -285,51 +281,55 @@ export const getHandovers = (req, res) => {
         }
         
         function sendResponse(data) {
-            // Get total count for pagination
-            if (limit !== 'all') {
-                let countSql = `
-                    SELECT COUNT(*) as total 
-                    FROM vehicle_handover vh
-                    INNER JOIN bookings b ON vh.booking_id = b.id
-                    WHERE 1=1
-                `;
-                
-                const countParams = [];
-                
-                // Add status filter to count query
-                if (status && status !== 'all') {
-                    countSql += ` AND b.status = ?`;
-                    countParams.push(status);
-                }
-                
-                if (search) {
-                    countSql += ` AND (
-                        b.booking_code LIKE ? OR
-                        (SELECT customer_name FROM customers WHERE id = b.customer_id) LIKE ?
-                    )`;
-                    countParams.push(`%${search}%`, `%${search}%`);
-                }
-                
-                db.query(countSql, countParams, (err, countResult) => {
-                    if (err) {
-                        console.error('Error counting handovers:', err);
-                        return res.status(500).json({ 
-                            message: 'Database error', 
-                            error: err.message 
-                        });
-                    }
-                    
-                    res.json({
+            if (limit === 'all') {
+                return res.json(data);
+            }
+            
+            let countSql = `
+                SELECT COUNT(*) as total 
+                FROM vehicle_handover vh
+                INNER JOIN bookings b ON vh.booking_id = b.id
+                WHERE 1=1
+            `;
+            
+            const countParams = [];
+            
+            if (status && status !== 'all') {
+                countSql += ` AND b.status = ?`;
+                countParams.push(status);
+            }
+            
+            if (search) {
+                countSql += ` AND (
+                    b.booking_code LIKE ? OR
+                    (SELECT customer_name FROM customers WHERE id = b.customer_id) LIKE ?
+                )`;
+                countParams.push(`%${search}%`, `%${search}%`);
+            }
+            
+            db.query(countSql, countParams, (err, countResult) => {
+                if (err) {
+                    console.error('Error counting handovers:', err);
+                    return res.json({
                         data: data,
-                        total: countResult[0].total,
+                        total: data.length,
                         page: parseInt(page),
                         limit: parseInt(limit),
-                        totalPages: Math.ceil(countResult[0].total / parseInt(limit))
+                        totalPages: 1
                     });
+                }
+                
+                const totalCount = countResult[0]?.total || 0;
+                const totalPages = Math.ceil(totalCount / parseInt(limit));
+                
+                res.json({
+                    data: data,
+                    total: totalCount,
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    totalPages: totalPages
                 });
-            } else {
-                res.json(data);
-            }
+            });
         }
     });
 };

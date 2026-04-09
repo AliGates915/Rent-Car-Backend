@@ -3,8 +3,8 @@ import { cloudinary } from "../config/cloudinary.js";
 
 // CREATE
 export const createVehicle = (req, res) => {
-  console.log('Request body:', req.body);
-  console.log('Files:', req.files);
+  // console.log('Request body:', req.body);
+  // console.log('Files:', req.files);
 
   const {
     registration_no,

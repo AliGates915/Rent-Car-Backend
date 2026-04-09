@@ -1,7 +1,41 @@
 import { db } from "../../config/db.js";
 import { addLedgerEntry } from "../../utils/ledger.js";
 
-// ====================== CREATE BOOKING ======================
+// Helper function to update vehicle status based on its bookings
+const updateVehicleStatus = (vehicleId, callback) => {
+  // Check if vehicle has any active bookings (confirmed or ongoing)
+  const checkActiveBookings = `
+    SELECT COUNT(*) as active_count 
+    FROM bookings 
+    WHERE vehicle_id = ? 
+    AND status IN ('confirmed', 'ongoing')
+    AND date_to >= CURDATE()
+  `;
+  
+  db.query(checkActiveBookings, [vehicleId], (err, result) => {
+    if (err) {
+      console.error('Error checking active bookings:', err);
+      if (callback) callback(err);
+      return;
+    }
+    
+    const hasActiveBookings = result[0].active_count > 0;
+    const newStatus = hasActiveBookings ? 'booked' : 'available';
+    
+    // Update vehicle status
+    const updateVehicleSql = `UPDATE vehicles SET status = ? WHERE id = ?`;
+    db.query(updateVehicleSql, [newStatus, vehicleId], (err, updateResult) => {
+      if (err) {
+        console.error('Error updating vehicle status:', err);
+        if (callback) callback(err);
+        return;
+      }
+      if (callback) callback(null, newStatus);
+    });
+  });
+};
+
+
 // ====================== CREATE BOOKING ======================
 export const createBooking = (req, res) => {
   const {
@@ -11,9 +45,9 @@ export const createBooking = (req, res) => {
     date_to,
     pickup_city,
     dropoff_city,
-    advance_amount = 0,  // This is payment toward rental
-    security_deposit = 0, // This is separate deposit (refundable)
-    upfront_payment = 0,  // Total paid now (advance + security deposit)
+    advance_amount = 0,
+    security_deposit = 0,
+    upfront_payment = 0,
   } = req.body;
 
   if (!customer_id || !vehicle_id || !date_from || !date_to) {
@@ -57,20 +91,10 @@ export const createBooking = (req, res) => {
 
       const rate = Number(vehicle[0].rate_per_day);
       const total_rental_amount = rate * days;
-      
-      // Total to be paid (rental + deposit)
       const total_amount = total_rental_amount + Number(security_deposit);
-      
-      // Amount paid now (advance toward rental + security deposit)
       const paid_now = Number(upfront_payment || 0);
-      
-      // Advance paid toward rental only
       const advance_paid = Math.min(Number(advance_amount || 0), total_rental_amount);
-      
-      // Security deposit collected
       const deposit_collected = Number(security_deposit || 0);
-      
-      // Total paid toward rental (not including deposit)
       const rental_paid = advance_paid;
 
       if (paid_now !== (advance_paid + deposit_collected)) {
@@ -79,7 +103,6 @@ export const createBooking = (req, res) => {
         });
       }
 
-      // Calculate payment status for rental only
       let payment_status = "unpaid";
       if (rental_paid === total_rental_amount) payment_status = "paid";
       else if (rental_paid > 0) payment_status = "partial";
@@ -91,7 +114,7 @@ export const createBooking = (req, res) => {
         (booking_code, customer_id, vehicle_id, date_from, date_to,
          pickup_city, dropoff_city, rate_per_day, total_days, total_amount,
          advance_amount, paid_amount, security_deposit, status, payment_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
       `;
 
       db.query(
@@ -106,16 +129,16 @@ export const createBooking = (req, res) => {
           dropoff_city,
           rate,
           days,
-          total_amount,  // rental + deposit
-          advance_paid,  // advance toward rental
-          rental_paid,   // total paid toward rental
-          deposit_collected, // security deposit
+          total_amount,
+          advance_paid,
+          rental_paid,
+          deposit_collected,
           payment_status,
         ],
         (err, result) => {
           if (err) return res.status(500).json(err);
 
-          // Update customer balance (only rental amount, deposit is separate)
+          // Update customer balance
           db.query(
             `UPDATE customers 
              SET balance = balance + ? - ? 
@@ -123,7 +146,7 @@ export const createBooking = (req, res) => {
             [total_rental_amount, rental_paid, customer_id],
           );
 
-          // Insert payment record for advance
+          // Insert payment records
           if (advance_paid > 0) {
             db.query(
               `INSERT INTO booking_payments 
@@ -133,7 +156,6 @@ export const createBooking = (req, res) => {
             );
           }
           
-          // Insert payment record for security deposit
           if (deposit_collected > 0) {
             db.query(
               `INSERT INTO booking_payments 
@@ -153,6 +175,11 @@ export const createBooking = (req, res) => {
             description: `Booking ${booking_code} - Rental amount`,
           });
 
+          // ✅ UPDATE VEHICLE STATUS TO 'booked' since booking is created
+          updateVehicleStatus(vehicle_id, (err) => {
+            if (err) console.error('Error updating vehicle status:', err);
+          });
+
           res.json({
             message: "Booking created successfully",
             booking_code,
@@ -168,8 +195,6 @@ export const createBooking = (req, res) => {
     });
   });
 };
-
-
 
 // ====================== UPDATE BOOKING ======================
 export const updateBooking = (req, res) => {
@@ -387,7 +412,6 @@ export const updateBooking = (req, res) => {
 };
 
 
-
 // Add this new function to get confirmed bookings
 export const getConfirmedBookings = (req, res) => {
   const { search } = req.query;
@@ -595,18 +619,39 @@ export const updateBookingStatus = (req, res) => {
     return res.status(400).json({ message: "Invalid status" });
   }
 
-  const sql = `UPDATE bookings SET status=? WHERE id=?`;
-
-  db.query(sql, [status, id], (err, result) => {
+  // First get the vehicle_id
+  const getVehicleSql = `SELECT vehicle_id FROM bookings WHERE id=?`;
+  
+  db.query(getVehicleSql, [id], (err, booking) => {
     if (err) return res.status(500).json(err);
-    
-    if (result.affectedRows === 0) {
+    if (!booking.length) {
       return res.status(404).json({ message: "Booking not found" });
     }
 
-    res.json({ 
-      message: `Booking ${status} successfully`,
-      status: status 
+    const vehicle_id = booking[0].vehicle_id;
+    
+    // Update booking status
+    const sql = `UPDATE bookings SET status=? WHERE id=?`;
+    
+    db.query(sql, [status, id], (err, result) => {
+      if (err) return res.status(500).json(err);
+      
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ message: "Booking not found" });
+      }
+
+      // ✅ Update vehicle status based on active bookings
+      updateVehicleStatus(vehicle_id, (err, newVehicleStatus) => {
+        if (err) {
+          console.error('Error updating vehicle status:', err);
+        }
+        
+        res.json({ 
+          message: `Booking ${status} successfully`,
+          status: status,
+          vehicle_status: newVehicleStatus
+        });
+      });
     });
   });
 };
@@ -615,7 +660,7 @@ export const updateBookingStatus = (req, res) => {
 export const cancelBooking = (req, res) => {
   const { id } = req.params;
 
-  // First get the booking details to reverse any payments
+  // First get the booking details
   const getBookingSql = `SELECT * FROM bookings WHERE id=?`;
   
   db.query(getBookingSql, [id], (err, booking) => {
@@ -637,7 +682,7 @@ export const cancelBooking = (req, res) => {
     db.query(updateSql, [id], (err, result) => {
       if (err) return res.status(500).json(err);
 
-      // Reverse customer balance (only rental amount, not deposit)
+      // Reverse customer balance
       const total_rental_amount = oldBooking.total_amount - (oldBooking.security_deposit || 0);
       const paid_amount = oldBooking.paid_amount || 0;
       
@@ -659,13 +704,23 @@ export const cancelBooking = (req, res) => {
         description: `Booking ${oldBooking.booking_code} cancelled - payment reversed`,
       });
 
-      res.json({ 
-        message: "Booking cancelled successfully",
-        booking_code: oldBooking.booking_code
+      // ✅ UPDATE VEHICLE STATUS - after cancellation, check if vehicle becomes available
+      updateVehicleStatus(oldBooking.vehicle_id, (err, newVehicleStatus) => {
+        if (err) {
+          console.error('Error updating vehicle status:', err);
+        }
+        
+        res.json({ 
+          message: "Booking cancelled successfully",
+          booking_code: oldBooking.booking_code,
+          vehicle_status: newVehicleStatus
+        });
       });
     });
   });
 };
+
+
 
 // ====================== AVAILABLE VEHICLES ======================
 export const getAvailableVehicles = (req, res) => {

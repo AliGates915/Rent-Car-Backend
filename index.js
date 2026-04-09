@@ -21,6 +21,7 @@ import maintenanceRoutes from "./routes/maintenance/maintenance.routes.js";
 import ownerEarningRoutes from "./routes/owner/ownerEarning.routes.js";
 import ownerRoutes from "./routes/owner/owner.routes.js";
 import dayBook from "./routes/daybook/daybook.routes.js";
+import { userRoutes } from "./routes/user.routes.js";
 
 dotenv.config();
 
@@ -33,6 +34,7 @@ app.use(express.json());
 
 
 // Other routes
+app.use("/api/users", userRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/vehicles", vehicleRoutes);
