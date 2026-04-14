@@ -59,7 +59,7 @@ export const getReturns = (req, res) => {
       -- Handover details
       vh.km_out as handover_km,
       vh.fuel_level_out as handover_fuel,
-      vh.handover_datetime
+      CONCAT(vh.handover_date, ' ', vh.handover_time) as handover_datetime
       
     FROM vehicle_return vr
     

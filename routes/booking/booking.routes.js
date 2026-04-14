@@ -8,6 +8,7 @@ import {
   cancelBooking,
   getConfirmedBookings,
   updateBookingStatus,
+  getVehicleAvailability
 } from "../../controllers/Booking/booking.controller.js";
 
 import { protect } from "../../middlewares/auth.middleware.js";
@@ -18,7 +19,7 @@ import {
   getVehicleBookingHistory,
   getBookingTimeline,
   getBookingStatistics,
-  exportBookingHistory
+  exportBookingHistory,
 } from '../../controllers/Booking/bookingHistoryController.js';
 
 const router = express.Router();
@@ -33,7 +34,7 @@ router.get("/:id", protect, getBookingById);
 router.put("/:id", protect, updateBooking);
 router.patch("/:id/cancel", protect, cancelBooking);
 router.patch("/:id/status", protect, updateBookingStatus);
-
+router.get('/bookings/check-availability', getVehicleAvailability);
 
 
 // NEW HISTORY ROUTES
