@@ -30,9 +30,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Register dynamic setup routes (these will handle all setup types)
-
-
 // Other routes
 app.use("/api/users", userRoutes);
 app.use("/api/auth", authRoutes);

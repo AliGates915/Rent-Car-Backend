@@ -6,7 +6,11 @@ import {
   updateReceipt,
   deleteReceipt,
   getReceiptReport,
-   getCustomerWithBalance,
+  getReceiptsByDateRange,
+  getReceiptSummary,
+  getReceiptReportData,
+  getReceiptsGrouped,
+  getCustomerWithBalance,
   getAllCustomersWithBalance,
 } from "../../controllers/Cash_receipt/receipt.controller.js";
 
@@ -18,13 +22,18 @@ const router = express.Router();
 router.get('/customers/with-balance', getAllCustomersWithBalance);
 router.get('/customers/:customer_id/balance', getCustomerWithBalance);
 
+// IMPORTANT: Put specific routes BEFORE parameterized routes (/:id)
+router.get("/report-data", protect, getReceiptReportData); // For raw data - SPECIFIC
+router.get("/report", protect, getReceiptReport); // SPECIFIC
+router.get('/date-range', getReceiptsByDateRange); // SPECIFIC
+router.get('/summary', getReceiptSummary); // SPECIFIC
+router.get('/grouped', getReceiptsGrouped); // SPECIFIC
 
-router.post("/", protect, addReceipt);
+// Generic routes (parameterized) - PUT THESE LAST
 router.get("/", protect, getReceipts);
 router.get("/:id", protect, getReceiptById);
+router.post("/", protect, addReceipt);
 router.put("/:id", protect, updateReceipt);
 router.delete("/:id", protect, deleteReceipt);
-
-router.get("/report/date", protect, getReceiptReport);
 
 export default router;

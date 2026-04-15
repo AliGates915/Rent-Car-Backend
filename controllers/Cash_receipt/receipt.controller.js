@@ -304,11 +304,11 @@ export const addReceipt = (req, res) => {
       },
     );
   } else {
-    // General receipt
+    // General receipt - FIXED: Include customer_id (even if NULL)
     db.query(
-      `INSERT INTO cash_receipts (amount, source, reference_id, payment_method, notes, created_at)
-       VALUES (?, ?, ?, ?, ?, NOW())`,
-      [amount, source, reference_id || null, payment_method, notes],
+      `INSERT INTO cash_receipts (amount, source, reference_id, payment_method, notes, customer_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+      [amount, source, reference_id || null, payment_method, notes, null], // Added null for customer_id
       (err, result) => {
         if (err) {
           console.error('Error inserting general receipt:', err);
@@ -323,6 +323,7 @@ export const addReceipt = (req, res) => {
     );
   }
 };
+
 
 // UPDATE
 export const updateReceipt = (req, res) => {
@@ -428,13 +429,33 @@ export const updateReceipt = (req, res) => {
   });
 };
 
-// GET ALL
+// GET ALL with customer name
 export const getReceipts = (req, res) => {
-  db.query(`SELECT * FROM cash_receipts ORDER BY id DESC`, (err, rows) => {
+  const query = `
+    SELECT 
+      cr.*,
+      c.customer_name as customer_name,
+      CASE 
+        WHEN cr.source = 'booking' AND cr.reference_id IS NOT NULL THEN CONCAT('Booking #', cr.reference_id)
+        WHEN cr.customer_id IS NOT NULL THEN c.customer_name
+        ELSE cr.source
+      END as received_from,
+      CASE 
+        WHEN cr.source = 'booking' THEN 'Booking Payment'
+        WHEN cr.customer_id IS NOT NULL THEN 'Customer Payment'
+        ELSE 'General Receipt'
+      END as head
+    FROM cash_receipts cr
+    LEFT JOIN customers c ON cr.customer_id = c.id
+    ORDER BY cr.id DESC
+  `;
+  
+  db.query(query, (err, rows) => {
     if (err) return res.status(500).json(err);
     res.json(rows);
   });
 };
+
 
 // GET BY ID
 export const getReceiptById = (req, res) => {
@@ -515,17 +536,251 @@ export const deleteReceipt = (req, res) => {
   });
 };
 
-// REPORT
+
+// In your cashReceiptsController.js
 export const getReceiptReport = (req, res) => {
+  console.log("Fetching receipt report...");
+  
+  const { start_date, end_date } = req.query;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const offset = (page - 1) * limit;
+  
+  let query = `
+    SELECT 
+      cr.*,
+      c.name as customer_name,
+      DATE(cr.created_at) as receipt_date
+    FROM cash_receipts cr
+    LEFT JOIN customers c ON cr.customer_id = c.id
+  `;
+  
+  let countQuery = `
+    SELECT COUNT(*) as total
+    FROM cash_receipts cr
+    LEFT JOIN customers c ON cr.customer_id = c.id
+  `;
+  
+  const params = [];
+  
+  // Add date filter if provided
+  if (start_date && end_date) {
+    const whereClause = ` WHERE DATE(cr.created_at) BETWEEN ? AND ?`;
+    query += whereClause;
+    countQuery += whereClause;
+    params.push(start_date, end_date);
+  }
+  
+  query += ` ORDER BY cr.created_at DESC LIMIT ? OFFSET ?`;
+  
+  // Get total count
+  db.query(countQuery, params.slice(0, 2), (err, countResult) => {
+    if (err) {
+      console.error('Error fetching count:', err);
+      return res.status(500).json({ error: err.message });
+    }
+    
+    const total = countResult[0]?.total || 0;
+    
+    // Get paginated data
+    db.query(query, [...params, limit, offset], (err, rows) => {
+      if (err) {
+        console.error('Error fetching receipt report:', err);
+        return res.status(500).json({ error: err.message });
+      }
+      
+      // Return in the format expected by useFetch
+      res.json({
+        data: rows,
+        total: total,
+        page: page,
+        limit: limit
+      });
+    });
+  });
+};
+
+// In your cashReceiptsController.js
+
+export const getReceiptReportData = (req, res) => {
+  console.log("Fetching raw receipt report data...");
+  
+  const { start_date, end_date } = req.query;
+  
+  let query = `
+    SELECT 
+      cr.*,
+      c.customer_name as customer_name,
+      DATE(cr.created_at) as receipt_date
+    FROM cash_receipts cr
+    LEFT JOIN customers c ON cr.customer_id = c.id
+  `;
+  
+  const params = [];
+  
+  // Add date filter ONLY if both dates are provided
+  if (start_date && end_date) {
+    query += ` WHERE DATE(cr.created_at) BETWEEN ? AND ?`;
+    params.push(start_date, end_date);
+  }
+  
+  query += ` ORDER BY cr.created_at DESC`;
+  
+  db.query(query, params, (err, rows) => {
+    if (err) {
+      console.error('Error fetching receipt report:', err);
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows);
+  });
+};
+
+// If you want to support single date or optional dates with more flexibility
+export const getReceiptReportDataFlexible = (req, res) => {
+  console.log("Fetching raw receipt report data with flexible date filtering...");
+  
+  const { start_date, end_date } = req.query;
+  
+  let query = `
+    SELECT 
+      cr.*,
+      c.name as customer_name,
+      DATE(cr.created_at) as receipt_date
+    FROM cash_receipts cr
+    LEFT JOIN customers c ON cr.customer_id = c.id
+  `;
+  
+  const conditions = [];
+  const params = [];
+  
+  // Handle different date scenarios
+  if (start_date && end_date) {
+    // Both dates provided - date range
+    conditions.push(`DATE(cr.created_at) BETWEEN ? AND ?`);
+    params.push(start_date, end_date);
+  } else if (start_date) {
+    // Only start date provided - from start date onwards
+    conditions.push(`DATE(cr.created_at) >= ?`);
+    params.push(start_date);
+  } else if (end_date) {
+    // Only end date provided - up to end date
+    conditions.push(`DATE(cr.created_at) <= ?`);
+    params.push(end_date);
+  }
+  
+  // Add WHERE clause if there are conditions
+  if (conditions.length > 0) {
+    query += ` WHERE ` + conditions.join(' AND ');
+  }
+  
+  query += ` ORDER BY cr.created_at DESC`;
+  
+  db.query(query, params, (err, rows) => {
+    if (err) {
+      console.error('Error fetching receipt report:', err);
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows);
+  });
+};
+
+// Alternative: Get receipts by specific date range
+export const getReceiptsByDateRange = (req, res) => {
   const { from, to } = req.query;
+  
+  if (!from || !to) {
+    return res.status(400).json({ message: "From and To dates are required" });
+  }
+  
+  const query = `
+    SELECT 
+      cr.*,
+      c.name as customer_name,
+      DATE(cr.created_at) as receipt_date
+    FROM cash_receipts cr
+    LEFT JOIN customers c ON cr.customer_id = c.id
+    WHERE DATE(cr.created_at) BETWEEN ? AND ?
+    ORDER BY cr.created_at DESC
+  `;
+  
+  db.query(query, [from, to], (err, rows) => {
+    if (err) {
+      console.error('Error fetching receipts by date range:', err);
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows);
+  });
+};
 
-  db.query(
-    `SELECT * FROM cash_receipts WHERE DATE(created_at) BETWEEN ? AND ?`,
-    [from, to],
-    (err, rows) => {
-      if (err) return res.status(500).json(err);
+// Get summary statistics for dashboard
+export const getReceiptSummary = (req, res) => {
+  const { start_date, end_date } = req.query;
+  
+  let query = `
+    SELECT 
+      COUNT(*) as total_count,
+      SUM(amount) as total_amount,
+      SUM(CASE WHEN payment_method = 'cash' THEN amount ELSE 0 END) as cash_total,
+      SUM(CASE WHEN payment_method = 'bank' THEN amount ELSE 0 END) as bank_total,
+      SUM(CASE WHEN payment_method = 'easypaisa' THEN amount ELSE 0 END) as easypaisa_total,
+      SUM(CASE WHEN payment_method = 'jazzcash' THEN amount ELSE 0 END) as jazzcash_total,
+      AVG(amount) as average_amount
+    FROM cash_receipts cr
+  `;
+  
+  const params = [];
+  
+  if (start_date && end_date) {
+    query += ` WHERE DATE(cr.created_at) BETWEEN ? AND ?`;
+    params.push(start_date, end_date);
+  }
+  
+  db.query(query, params, (err, rows) => {
+    if (err) {
+      console.error('Error fetching receipt summary:', err);
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows[0]);
+  });
+};
 
-      res.json(rows);
-    },
-  );
+// Get grouped receipts by date
+export const getReceiptsGrouped = (req, res) => {
+  const { start_date, end_date, group_by = 'day' } = req.query;
+  
+  let dateFormat;
+  switch(group_by) {
+    case 'week':
+      dateFormat = 'YEARWEEK(created_at)';
+      break;
+    case 'month':
+      dateFormat = 'DATE_FORMAT(created_at, "%Y-%m")';
+      break;
+    default: // day
+      dateFormat = 'DATE(created_at)';
+  }
+  
+  const query = `
+    SELECT 
+      ${dateFormat} as period,
+      COUNT(*) as count,
+      SUM(amount) as total,
+      SUM(CASE WHEN payment_method = 'cash' THEN amount ELSE 0 END) as cash_total,
+      SUM(CASE WHEN payment_method = 'bank' THEN amount ELSE 0 END) as bank_total,
+      SUM(CASE WHEN payment_method = 'easypaisa' THEN amount ELSE 0 END) as easypaisa_total,
+      SUM(CASE WHEN payment_method = 'jazzcash' THEN amount ELSE 0 END) as jazzcash_total,
+      MIN(DATE(created_at)) as period_start
+    FROM cash_receipts cr
+    WHERE DATE(created_at) BETWEEN ? AND ?
+    GROUP BY period
+    ORDER BY period_start ASC
+  `;
+  
+  db.query(query, [start_date, end_date], (err, rows) => {
+    if (err) {
+      console.error('Error fetching grouped receipts:', err);
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows);
+  });
 };
