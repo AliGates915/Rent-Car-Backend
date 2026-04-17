@@ -2,7 +2,6 @@ import { db } from "../../config/db.js";
 import { addLedgerEntry } from "../../utils/ledger.js";
 
 // Helper function to update vehicle status based on its bookings
-// Helper function to update vehicle status based on its bookings (IMPROVED)
 const updateVehicleStatus = (vehicleId, callback) => {
   // Check if vehicle has any active or future confirmed bookings
   const checkActiveBookings = `
@@ -878,3 +877,252 @@ export const getAvailableVehicles = (req, res) => {
     res.json(formatted);
   });
 };
+  
+// ====================== DELETE BOOKING WITH FULL REVERSAL ======================
+export const deleteBooking = (req, res) => {
+  const { id } = req.params;
+
+  // First check if booking exists and get its details
+  const getBookingSql = `
+    SELECT 
+      b.*,
+      v.id as vehicle_id,
+      v.status as vehicle_status,
+      c.id as customer_id,
+      c.balance as customer_balance
+    FROM bookings b
+    INNER JOIN vehicles v ON b.vehicle_id = v.id
+    INNER JOIN customers c ON b.customer_id = c.id
+    WHERE b.id = ?
+  `;
+
+  db.query(getBookingSql, [id], (err, bookings) => {
+    if (err) {
+      console.error('Error fetching booking:', err);
+      return res.status(500).json({ error: err.message });
+    }
+
+    if (bookings.length === 0) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    const booking = bookings[0];
+
+    // Check if booking can be deleted based on status
+    const allowedStatusesForDeletion = ['pending', 'cancelled'];
+    const cannotDeleteStatuses = ['ongoing', 'completed'];
+    
+    if (cannotDeleteStatuses.includes(booking.status?.toLowerCase())) {
+      return res.status(400).json({
+        error: "Cannot delete booking",
+        message: `Booking with status '${booking.status}' cannot be deleted. Only pending or cancelled bookings can be deleted.`,
+        booking_code: booking.booking_code,
+        current_status: booking.status,
+        suggested_action: booking.status === 'ongoing' ? 'Complete handover first' : 'Archive instead'
+      });
+    }
+
+    // Get all payments for this booking (without transaction_id)
+    const getPaymentsSql = `
+      SELECT 
+        id,
+        payment_type,
+        amount,
+        payment_method,
+        notes,
+        created_at
+      FROM booking_payments 
+      WHERE booking_id = ?
+      ORDER BY created_at ASC
+    `;
+
+    db.query(getPaymentsSql, [id], (err2, payments) => {
+      if (err2) {
+        console.error('Error fetching payments:', err2);
+        return res.status(500).json({ error: err2.message });
+      }
+
+      const hasPayments = payments && payments.length > 0;
+      const totalPaid = payments?.reduce((sum, p) => sum + parseFloat(p.amount), 0) || 0;
+
+      // Get ledger entries
+      const getLedgerSql = `
+        SELECT 
+          id,
+          entry_type,
+          debit,
+          credit,
+          description
+        FROM ledgers
+        WHERE reference_table = 'bookings' AND reference_id = ?
+      `;
+
+      db.query(getLedgerSql, [id], (err3, ledgers) => {
+        if (err3) {
+          console.error('Error fetching ledgers:', err3);
+          return res.status(500).json({ error: err3.message });
+        }
+
+        const hasLedgerEntries = ledgers && ledgers.length > 0;
+
+        // Start transaction for deletion
+        db.beginTransaction((transactionErr) => {
+          if (transactionErr) {
+            return res.status(500).json({ error: transactionErr.message });
+          }
+
+          // Execute all queries in sequence
+          const executeQueries = async () => {
+            try {
+              // 1. Reverse customer balance
+              if (booking.total_amount > 0) {
+                await new Promise((resolve, reject) => {
+                  db.query(
+                    `UPDATE customers 
+                     SET balance = balance - ? 
+                     WHERE id = ?`,
+                    [booking.total_amount - (booking.paid_amount || 0), booking.customer_id],
+                    (err, result) => {
+                      if (err) reject(err);
+                      else resolve(result);
+                    }
+                  );
+                });
+              }
+
+              // 2. Create reversal ledger entries for all existing ledgers
+              if (hasLedgerEntries) {
+                for (const ledger of ledgers) {
+                  await new Promise((resolve, reject) => {
+                    const reversalSql = `
+                      INSERT INTO ledgers
+                      (entry_type, reference_id, reference_table, customer_id, vehicle_id, debit, credit, description, created_at)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                    `;
+                    
+                    db.query(reversalSql, [
+                      'deletion_reversal',
+                      booking.id,
+                      'bookings',
+                      booking.customer_id,
+                      booking.vehicle_id,
+                      ledger.credit, // Reverse credit to debit
+                      ledger.debit,   // Reverse debit to credit
+                      `DELETION: ${ledger.description} (Reversed)`
+                    ], (err) => {
+                      if (err) reject(err);
+                      else resolve();
+                    });
+                  });
+                }
+                
+                // Delete original ledger entries
+                await new Promise((resolve, reject) => {
+                  db.query("DELETE FROM ledgers WHERE reference_table = 'bookings' AND reference_id = ?", [id], (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                  });
+                });
+              }
+
+              // 3. Create reversal entries for payments and delete them
+              if (hasPayments) {
+                for (const payment of payments) {
+                  // Add reversal payment record
+                  await new Promise((resolve, reject) => {
+                    const reversalPaymentSql = `
+                      INSERT INTO booking_payments
+                      (booking_id, payment_type, amount, payment_method, notes, created_at)
+                      VALUES (?, 'reversal', ?, ?, ?, NOW())
+                    `;
+                    
+                    db.query(reversalPaymentSql, [
+                      booking.id,
+                      payment.amount,
+                      payment.payment_method || 'system',
+                      `Payment reversal for booking deletion - Original: ${payment.notes || payment.payment_type} (ID: ${payment.id})`
+                    ], (err) => {
+                      if (err) reject(err);
+                      else resolve();
+                    });
+                  });
+                }
+                
+                // Delete original payments
+                await new Promise((resolve, reject) => {
+                  db.query("DELETE FROM booking_payments WHERE booking_id = ?", [id], (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                  });
+                });
+              }
+
+              // 4. Update vehicle status back to available
+              await new Promise((resolve, reject) => {
+                const updateVehicleSql = `
+                  UPDATE vehicles 
+                  SET status = 'available' 
+                  WHERE id = ?
+                `;
+                db.query(updateVehicleSql, [booking.vehicle_id], (err) => {
+                  if (err) reject(err);
+                  else resolve();
+                });
+              });
+
+              // 5. Delete the booking
+              await new Promise((resolve, reject) => {
+                db.query("DELETE FROM bookings WHERE id = ?", [id], (err) => {
+                  if (err) reject(err);
+                  else resolve();
+                });
+              });
+
+              // Commit transaction
+              db.commit((commitErr) => {
+                if (commitErr) {
+                  return db.rollback(() => {
+                    res.status(500).json({ error: commitErr.message });
+                  });
+                }
+
+                res.json({
+                  success: true,
+                  message: hasPayments ? "Booking deleted successfully with all payments reversed" : "Booking deleted successfully",
+                  deleted_booking: {
+                    id: parseInt(id),
+                    booking_code: booking.booking_code,
+                    customer_id: booking.customer_id,
+                    vehicle_id: booking.vehicle_id,
+                    status: booking.status,
+                    original_total_amount: booking.total_amount,
+                    original_paid_amount: booking.paid_amount,
+                    had_payments: hasPayments,
+                    total_payments_reversed: totalPaid,
+                    had_ledger_entries: hasLedgerEntries
+                  }
+                });
+              });
+
+            } catch (error) {
+              db.rollback(() => {
+                console.error('Transaction error:', error);
+                res.status(500).json({ 
+                  error: "Failed to delete booking", 
+                  details: error.message,
+                  reversal_status: "failed"
+                });
+              });
+            }
+          };
+
+          executeQueries();
+        });
+      });
+    });
+  });
+};
+
+
+
+

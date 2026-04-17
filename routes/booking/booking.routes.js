@@ -8,6 +8,7 @@ import {
   cancelBooking,
   getConfirmedBookings,
   updateBookingStatus,
+  deleteBooking,
   getVehicleAvailability
 } from "../../controllers/Booking/booking.controller.js";
 
@@ -30,6 +31,7 @@ router.post("/", protect, createBooking);
 router.get("/", protect, getBookings);
 router.get("/confirmed", getConfirmedBookings); 
 router.get("/:id", protect, getBookingById);
+router.delete("/:id", protect, deleteBooking);
 
 router.put("/:id", protect, updateBooking);
 router.patch("/:id/cancel", protect, cancelBooking);

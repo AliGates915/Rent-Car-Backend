@@ -8,6 +8,7 @@ export const createVehicle = (req, res) => {
 
   const {
     registration_no,
+     owner_id,
     car_type,
     car_make,
     car_model,
@@ -35,19 +36,20 @@ export const createVehicle = (req, res) => {
 
   const sql = `
     INSERT INTO vehicles (
-      registration_no, car_type, car_make, car_model, year_of_model,
+      registration_no,  owner_id, car_type, car_make, car_model, year_of_model,
       rate_per_day, color, transmission_type, fuel_type,
       engine_capacity, seating_capacity, location,
       air_conditioner, heater, sunroof, android,
       front_camera, rear_camera, status
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   db.query(
     sql,
     [
       registration_no,
+       owner_id,
       car_type,
       car_make,
       car_model,
@@ -83,7 +85,7 @@ export const createVehicle = (req, res) => {
           file.public_id || `vehicle_${vehicleId}_${Date.now()}`, // Cloudinary public_id
         ]);
 
-        console.log('Inserting images:', imageValues);
+        // console.log('Inserting images:', imageValues);
 
         const insertSql = "INSERT INTO vehicle_images (vehicle_id, image_url, public_id) VALUES ?";
         
@@ -96,7 +98,7 @@ export const createVehicle = (req, res) => {
               imageError: imgErr.message
             });
           }
-          console.log('Images inserted successfully:', imgResult);
+          // console.log('Images inserted successfully:', imgResult);
           res.json({ message: "Vehicle created successfully with images", id: vehicleId });
         });
       } else {
@@ -115,6 +117,7 @@ export const updateVehicle = (req, res) => {
   const {
     registration_no,
     car_type,
+     owner_id,
     car_make,
     car_model,
     year_of_model,
@@ -145,7 +148,7 @@ export const updateVehicle = (req, res) => {
 
   const sql = `
     UPDATE vehicles SET
-      registration_no = ?, car_type = ?, car_make = ?, car_model = ?,
+      registration_no = ?,  owner_id = ?, car_type = ?, car_make = ?, car_model = ?,
       year_of_model = ?, rate_per_day = ?, color = ?, transmission_type = ?,
       fuel_type = ?, engine_capacity = ?, seating_capacity = ?, location = ?,
       air_conditioner = ?, heater = ?, sunroof = ?, android = ?,
@@ -157,6 +160,7 @@ export const updateVehicle = (req, res) => {
     sql,
     [
       registration_no,
+      owner_id,
       car_type,
       car_make,
       car_model,
@@ -396,28 +400,78 @@ export const getVehicleById = (req, res) => {
 };
 
 
- // Delete Vehicle
+// Delete Vehicle (Soft Delete)
 export const deleteVehicle = (req, res) => {
   const { id } = req.params;
 
+  // First check if vehicle has any bookings (including cancelled)
   db.query(
-    "SELECT public_id FROM vehicle_images WHERE vehicle_id=?",
+    "SELECT COUNT(*) as booking_count FROM bookings WHERE vehicle_id = ?",
     [id],
-    async (err, images) => {
-      if (images && images.length > 0) {
-        for (let img of images) {
-          await cloudinary.uploader.destroy(img.public_id);
-        }
+    (err, result) => {
+      if (err) {
+        console.error('Error checking bookings:', err);
+        return res.status(500).json({ error: err.message });
       }
 
-      db.query("DELETE FROM vehicles WHERE id=?", [id], (err) => {
-        if (err) return res.status(500).json(err);
+      const bookingCount = result[0].booking_count;
+      
+      if (bookingCount > 0) {
+        // Soft delete - mark as inactive instead of deleting
+        db.query(
+          "UPDATE vehicles SET is_active = FALSE, deleted_at = NOW() WHERE id = ?",
+          [id],
+          (updateErr) => {
+            if (updateErr) {
+              console.error('Error soft deleting vehicle:', updateErr);
+              return res.status(500).json({ error: updateErr.message });
+            }
+            
+            // Still delete images from cloudinary
+            db.query(
+              "SELECT public_id FROM vehicle_images WHERE vehicle_id=?",
+              [id],
+              async (imgErr, images) => {
+                if (images && images.length > 0) {
+                  for (let img of images) {
+                    await cloudinary.uploader.destroy(img.public_id);
+                  }
+                }
+                
+                // Optionally delete image records or mark them as inactive too
+                db.query("DELETE FROM vehicle_images WHERE vehicle_id=?", [id], () => {});
+                
+                res.json({ 
+                  message: "Vehicle deactivated successfully. It has existing bookings so it cannot be permanently deleted.",
+                  softDeleted: true 
+                });
+              }
+            );
+          }
+        );
+      } else {
+        // No bookings - can permanently delete
+        db.query(
+          "SELECT public_id FROM vehicle_images WHERE vehicle_id=?",
+          [id],
+          async (imgErr, images) => {
+            if (images && images.length > 0) {
+              for (let img of images) {
+                await cloudinary.uploader.destroy(img.public_id);
+              }
+            }
 
-        res.json({ message: "Vehicle deleted successfully" });
-      });
+            db.query("DELETE FROM vehicles WHERE id=?", [id], (deleteErr) => {
+              if (deleteErr) return res.status(500).json(deleteErr);
+              res.json({ message: "Vehicle deleted successfully", permanentDelete: true });
+            });
+          }
+        );
+      }
     }
   );
 };
+
 
 // Create new document for a vehicle (with file upload)
 export const createVehicleDocument = (req, res) => {

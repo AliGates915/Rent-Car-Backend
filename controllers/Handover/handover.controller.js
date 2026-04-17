@@ -112,7 +112,6 @@ export const createHandover = (req, res) => {
 };
 
 
-
 export const getHandovers = (req, res) => {
     const { page = 1, limit = 10, search, status = "ongoing" } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
