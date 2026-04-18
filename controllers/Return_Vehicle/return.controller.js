@@ -219,110 +219,214 @@ export const returnVehicle = (req, res) => {
 
       const booking = result[0];
       
-      // Get total paid from booking
-      const total_paid = parseFloat(booking.advance_amount || 0) + parseFloat(booking.paid_amount || 0);
-      
-      // Calculate late days
-      let late_days = 0;
-      let late_charges = 0;
-      const returnDate = new Date(return_date);
-      const endDate = new Date(booking.date_to);
-      
-      returnDate.setHours(0, 0, 0, 0);
-      endDate.setHours(0, 0, 0, 0);
-      
-      if (returnDate > endDate) {
-        const diffTime = returnDate - endDate;
-        late_days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        const dailyRate = Number(booking.rate_per_day || 0);
-        late_charges = late_days * dailyRate * 1.5;
-      }
-      
-      // Calculate final amounts
-      const base_amount = Number(booking.total_amount || 0);
-      const final_amount = base_amount + Number(extra_charges) + Number(damage_charges) + late_charges;
-      const balance_amount = final_amount - total_paid;
-      
-      // Insert return record (without deposit_refund)
-      const insertReturn = `
-        INSERT INTO vehicle_return
-        (booking_id, vehicle_id, return_date, total_days, late_days, 
-         extra_charges, damage_charges, final_amount, paid_amount, 
-         balance_amount, notes, returned_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `;
-
-      db.query(insertReturn, [
-        booking.id,
-        booking.vehicle_id,
-        return_date,
-        booking.total_days,
-        late_days,
-        extra_charges,
-        damage_charges,
-        final_amount,
-        total_paid,
-        balance_amount,
-        notes || null,
-        returned_by || null
-      ], (err3, insertResult) => {
-        if (err3) {
-          console.error('Error inserting return:', err3);
-          return res.status(500).json({ error: err3.message });
-        }
-
-        // Update booking status to completed
-        db.query(`UPDATE bookings SET status='completed', updated_at=NOW() WHERE id=?`, [booking_id], (updateErr) => {
-          if (updateErr) console.error('Error updating booking status:', updateErr);
+      // Get total paid from booking_payments table (not from booking record)
+      const getTotalPaid = () => {
+        return new Promise((resolve, reject) => {
+          db.query(
+            `SELECT SUM(amount) as total_paid 
+             FROM booking_payments 
+             WHERE booking_id = ? AND payment_type IN ('advance', 'payment')`,
+            [booking_id],
+            (err, result) => {
+              if (err) reject(err);
+              resolve(result[0]?.total_paid || 0);
+            }
+          );
         });
-        
-        // Update vehicle status to available
-        db.query(`UPDATE vehicles SET status='available' WHERE id=?`, [booking.vehicle_id], (vehicleErr) => {
-          if (vehicleErr) console.error('Error updating vehicle status:', vehicleErr);
-        });
+      };
 
-        // Update customer balance
-        db.query(
-          `UPDATE customers SET balance = balance - ? + ? WHERE id=?`,
-          [final_amount, total_paid, booking.customer_id],
-          (balanceErr) => {
-            if (balanceErr) console.error('Error updating customer balance:', balanceErr);
+      // Get security deposit
+      const getSecurityDeposit = () => {
+        return new Promise((resolve, reject) => {
+          db.query(
+            `SELECT SUM(amount) as deposit 
+             FROM booking_payments 
+             WHERE booking_id = ? AND payment_type = 'security_deposit'`,
+            [booking_id],
+            (err, result) => {
+              if (err) reject(err);
+              resolve(result[0]?.deposit || 0);
+            }
+          );
+        });
+      };
+
+      Promise.all([getTotalPaid(), getSecurityDeposit()])
+        .then(([total_paid, security_deposit]) => {
+          // Calculate late days
+          let late_days = 0;
+          let late_charges = 0;
+          const returnDate = new Date(return_date);
+          const endDate = new Date(booking.date_to);
+          
+          returnDate.setHours(0, 0, 0, 0);
+          endDate.setHours(0, 0, 0, 0);
+          
+          if (returnDate > endDate) {
+            const diffTime = returnDate - endDate;
+            late_days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            const dailyRate = Number(booking.rate_per_day || 0);
+            late_charges = late_days * dailyRate * 1.5; // 50% extra for late return
           }
-        );
+          
+          // Calculate final amounts
+          const base_amount = Number(booking.total_amount || 0);
+          const final_amount = base_amount + Number(extra_charges) + Number(damage_charges) + late_charges;
+          const balance_amount = final_amount - total_paid;
+          const deposit_refund = security_deposit - (Number(damage_charges) + Number(extra_charges));
+          
+          // Start transaction
+          db.beginTransaction((transactionErr) => {
+            if (transactionErr) {
+              return res.status(500).json({ error: transactionErr.message });
+            }
 
-        // Add ledger entry
-        addLedgerEntry({
-          entry_type: "return",
-          reference_id: booking_id,
-          reference_table: "vehicle_return",
-          vehicle_id: booking.vehicle_id,
-          customer_id: booking.customer_id,
-          description: `Vehicle returned - Booking ${booking.booking_code}`,
+            // Insert return record
+            const insertReturn = `
+              INSERT INTO vehicle_return
+              (booking_id, vehicle_id, return_date, total_days, late_days, 
+               extra_charges, damage_charges, final_amount, paid_amount, 
+               balance_amount, notes, returned_by)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `;
+
+            db.query(insertReturn, [
+              booking.id,
+              booking.vehicle_id,
+              return_date,
+              booking.total_days,
+              late_days,
+              extra_charges,
+              damage_charges,
+              final_amount,
+              total_paid,
+              balance_amount,
+              notes || null,
+              returned_by || null
+            ], (err3, insertResult) => {
+              if (err3) {
+                return db.rollback(() => {
+                  console.error('Error inserting return:', err3);
+                  res.status(500).json({ error: err3.message });
+                });
+              }
+
+              // Update booking status to completed
+              db.query(`UPDATE bookings SET status='completed', payment_status=?, updated_at=NOW() WHERE id=?`, 
+                [balance_amount <= 0 ? 'paid' : 'partial', booking_id], 
+                (updateErr) => {
+                  if (updateErr) {
+                    return db.rollback(() => {
+                      console.error('Error updating booking status:', updateErr);
+                      res.status(500).json({ error: updateErr.message });
+                    });
+                  }
+                });
+              
+              // Update vehicle status to available
+              db.query(`UPDATE vehicles SET status='available' WHERE id=?`, [booking.vehicle_id], (vehicleErr) => {
+                if (vehicleErr) {
+                  console.error('Error updating vehicle status:', vehicleErr);
+                  // Don't rollback for this error
+                }
+              });
+
+              // CORRECTED: Update customer balance
+              // If balance_amount is positive, customer owes more money
+              // If balance_amount is negative, customer is owed a refund
+              db.query(
+                `UPDATE customers SET balance = balance + ? WHERE id=?`,
+                [balance_amount, booking.customer_id],
+                (balanceErr) => {
+                  if (balanceErr) {
+                    return db.rollback(() => {
+                      console.error('Error updating customer balance:', balanceErr);
+                      res.status(500).json({ error: balanceErr.message });
+                    });
+                  }
+
+                  // Add ledger entry for the return
+                  const ledgerQuery = `
+                    INSERT INTO ledger_entries 
+                    (entry_type, reference_id, reference_table, vehicle_id, customer_id, amount, description, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                  `;
+                  
+                  db.query(ledgerQuery, [
+                    "return",
+                    insertResult.insertId,
+                    "vehicle_return",
+                    booking.vehicle_id,
+                    booking.customer_id,
+                    balance_amount,
+                    `Vehicle returned - Booking ${booking.booking_code} | Balance due: ${balance_amount}`
+                  ], (ledgerErr) => {
+                    if (ledgerErr) {
+                      console.error('Error adding ledger entry:', ledgerErr);
+                      // Don't rollback for ledger errors
+                    }
+
+                    // If there's a deposit refund, create a negative payment record
+                    if (deposit_refund > 0) {
+                      const refundQuery = `
+                        INSERT INTO booking_payments 
+                        (booking_id, payment_type, amount, payment_method, notes, created_at)
+                        VALUES (?, 'refund', ?, 'cash', ?, NOW())
+                      `;
+                      
+                      db.query(refundQuery, [
+                        booking_id,
+                        -deposit_refund, // Negative amount for refund
+                        `Security deposit refund - Damage: ${damage_charges}, Extra: ${extra_charges}`
+                      ], (refundErr) => {
+                        if (refundErr) {
+                          console.error('Error recording deposit refund:', refundErr);
+                        }
+                      });
+                    }
+
+                    // Create owner earning entry if eligible
+                    createOwnerEarningIfEligible(booking_id);
+
+                    // Commit transaction
+                    db.commit((commitErr) => {
+                      if (commitErr) {
+                        return db.rollback(() => {
+                          console.error('Error committing transaction:', commitErr);
+                          res.status(500).json({ error: commitErr.message });
+                        });
+                      }
+
+                      res.json({
+                        success: true,
+                        message: "Return completed successfully",
+                        return_id: insertResult.insertId,
+                        calculations: {
+                          base_amount,
+                          extra_charges,
+                          damage_charges,
+                          late_charges,
+                          late_days,
+                          final_amount,
+                          total_paid,
+                          balance_due: balance_amount,
+                          deposit_refund: deposit_refund > 0 ? deposit_refund : 0
+                        }
+                      });
+                    });
+                  });
+                }
+              );
+            });
+          });
+        })
+        .catch(error => {
+          console.error('Error calculating payments:', error);
+          res.status(500).json({ error: error.message });
         });
-
-        // Create owner earning entry if eligible (booking completed and payment paid)
-        createOwnerEarningIfEligible(booking_id);
-
-        res.json({
-          success: true,
-          message: "Return completed successfully",
-          return_id: insertResult.insertId,
-          calculations: {
-            base_amount,
-            extra_charges,
-            damage_charges,
-            late_charges,
-            late_days,
-            final_amount,
-            total_paid,
-            balance_due: balance_amount
-          }
-        });
-      });
     }
   );
 };
-
 // Get pending returns
 export const getPendingReturns = (req, res) => {
   const { page = 1, limit = 10, search } = req.query;
