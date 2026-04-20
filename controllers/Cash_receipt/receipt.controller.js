@@ -12,14 +12,17 @@ export const getCustomerWithBalance = (req, res) => {
      WHERE id = ?`,
     [customer_id],
     (err, customerRows) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) {
+        console.error('Error fetching customer:', err);
+        return res.status(500).json({ error: err.message });
+      }
       if (!customerRows.length) {
         return res.status(404).json({ message: "Customer not found" });
       }
 
       const customer = customerRows[0];
 
-      // Fetch all bookings with payment status
+      // Fetch all bookings with payment status AND owner earnings
       db.query(
         `SELECT 
           b.id,
@@ -34,16 +37,24 @@ export const getCustomerWithBalance = (req, res) => {
           b.status as booking_status,
           b.created_at,
           v.registration_no,
-          v.car_make,
-          v.car_model,
-          (b.total_amount - (b.advance_amount + b.paid_amount)) as remaining_amount
+          v.owner_id,
+          v.owner_percentage,
+          (b.total_amount - (b.advance_amount + b.paid_amount)) as remaining_amount,
+          oe.id as earning_id,
+          oe.owner_amount,
+          oe.company_amount,
+          oe.status as earnings_status
         FROM bookings b
         INNER JOIN vehicles v ON b.vehicle_id = v.id
+        LEFT JOIN owner_earnings oe ON b.id = oe.booking_id
         WHERE b.customer_id = ?
         ORDER BY b.created_at DESC`,
         [customer_id],
         (err2, bookings) => {
-          if (err2) return res.status(500).json({ error: err2.message });
+          if (err2) {
+            console.error('Error fetching bookings:', err2);
+            return res.status(500).json({ error: err2.message });
+          }
 
           // Calculate summary statistics
           const summary = {
@@ -58,20 +69,43 @@ export const getCustomerWithBalance = (req, res) => {
             }
           };
 
+          // Format bookings with owner earnings info
+          const formattedBookings = bookings.map(b => ({
+            id: b.id,
+            booking_code: b.booking_code,
+            date_from: b.date_from,
+            date_to: b.date_to,
+            total_amount: Number(b.total_amount) || 0,
+            advance_amount: Number(b.advance_amount) || 0,
+            paid_amount: Number(b.paid_amount) || 0,
+            remaining_amount: Number(b.remaining_amount) || 0,
+            security_deposit: Number(b.security_deposit) || 0,
+            payment_status: b.payment_status,
+            booking_status: b.booking_status,
+            registration_no: b.registration_no,
+            // Include owner earnings info
+            owner_earnings: b.earning_id ? {
+              id: b.earning_id,
+              owner_amount: Number(b.owner_amount) || 0,
+              company_amount: Number(b.company_amount) || 0,
+              status: b.earnings_status
+            } : null,
+            // For frontend convenience
+            owner_remaining: Number(b.owner_amount) || 0,
+            company_remaining: Number(b.company_amount) || 0
+          }));
+
           res.json({
             success: true,
             customer: {
-              ...customer,
+              id: customer.id,
+              customer_name: customer.customer_name,
+              phone_no: customer.phone_no,
+              cnic_no: customer.cnic_no,
+              address: customer.address,
               balance: Number(customer.balance) || 0
             },
-            bookings: bookings.map(b => ({
-              ...b,
-              total_amount: Number(b.total_amount) || 0,
-              advance_amount: Number(b.advance_amount) || 0,
-              paid_amount: Number(b.paid_amount) || 0,
-              remaining_amount: Number(b.remaining_amount) || 0,
-              security_deposit: Number(b.security_deposit) || 0
-            })),
+            bookings: formattedBookings,
             summary
           });
         }
@@ -90,16 +124,20 @@ export const getAllCustomersWithBalance = (req, res) => {
       c.customer_name,
       c.phone_no,
       c.cnic_no,
+      c.address,
       COALESCE(c.balance, 0) as balance,
-      COUNT(b.id) as total_bookings,
+      COUNT(DISTINCT b.id) as total_bookings,
       COALESCE(SUM(b.total_amount), 0) as total_booking_amount,
       COALESCE(SUM(b.advance_amount + b.paid_amount), 0) as total_paid_amount,
       COALESCE(SUM(b.total_amount - (b.advance_amount + b.paid_amount)), 0) as total_remaining_amount,
       SUM(CASE WHEN b.payment_status = 'paid' THEN 1 ELSE 0 END) as paid_bookings,
       SUM(CASE WHEN b.payment_status = 'partial' THEN 1 ELSE 0 END) as partial_bookings,
-      SUM(CASE WHEN b.payment_status = 'unpaid' THEN 1 ELSE 0 END) as unpaid_bookings
+      SUM(CASE WHEN b.payment_status = 'unpaid' THEN 1 ELSE 0 END) as unpaid_bookings,
+      COALESCE(SUM(oe.owner_amount), 0) as total_owner_due,
+      COALESCE(SUM(oe.company_amount), 0) as total_company_due
     FROM customers c
-    LEFT JOIN bookings b ON c.id = b.customer_id AND b.status != 'cancelled'
+    LEFT JOIN bookings b ON c.id = b.customer_id AND b.status IN ('ongoing', 'completed')
+    LEFT JOIN owner_earnings oe ON b.id = oe.booking_id AND oe.status = 'unpaid'
     WHERE 1=1
   `;
 
@@ -113,7 +151,7 @@ export const getAllCustomersWithBalance = (req, res) => {
 
   sql += ` GROUP BY c.id`;
   
-  // Only show customers with balance > 0
+  // Only show customers with balance > 0 or remaining amount > 0
   sql += ` HAVING balance > 0 OR total_remaining_amount > 0`;
   
   sql += ` ORDER BY balance DESC, total_remaining_amount DESC`;
@@ -130,8 +168,7 @@ export const getAllCustomersWithBalance = (req, res) => {
         id: row.id,
         customer_name: row.customer_name,
         phone_no: row.phone_no,
-        cnic_no: row.cnic_no,
-        email: row.email,
+        cnic_no: row.cnic_no,                                                               
         address: row.address,
         balance: Number(row.balance) || 0,
         total_bookings: Number(row.total_bookings) || 0,
@@ -140,65 +177,133 @@ export const getAllCustomersWithBalance = (req, res) => {
         total_remaining_amount: Number(row.total_remaining_amount) || 0,
         paid_bookings: Number(row.paid_bookings) || 0,
         partial_bookings: Number(row.partial_bookings) || 0,
-        unpaid_bookings: Number(row.unpaid_bookings) || 0
+        unpaid_bookings: Number(row.unpaid_bookings) || 0,
+        total_owner_due: Number(row.total_owner_due) || 0,
+        total_company_due: Number(row.total_company_due) || 0
       }))
     });
   });
 };
 
-
 // Helper function to update customer balance
 const updateCustomerBalance = (customer_id, callback) => {
-  // Calculate total outstanding from all bookings
+  // Calculate total outstanding from all completed/ongoing bookings
   db.query(
     `SELECT 
-       SUM(total_amount - (advance_amount + paid_amount)) as total_outstanding
-     FROM bookings 
-     WHERE customer_id = ? AND status != 'cancelled'`,
+       b.id,
+       b.total_amount,
+       COALESCE(SUM(bp.amount), 0) as total_paid
+     FROM bookings b
+     LEFT JOIN booking_payments bp ON b.id = bp.booking_id 
+       AND bp.payment_type IN ('advance', 'payment')
+     WHERE b.customer_id = ? 
+       AND b.status IN ('ongoing', 'completed')
+     GROUP BY b.id`,
     [customer_id],
-    (err, result) => {
+    (err, bookings) => {
       if (err) return callback(err);
       
-      const outstanding = Number(result[0]?.total_outstanding) || 0;
+      let totalOutstanding = 0;
+      bookings.forEach(booking => {
+        const outstanding = Number(booking.total_amount) - Number(booking.total_paid);
+        if (outstanding > 0) {
+          totalOutstanding += outstanding;
+        }
+      });
       
-      // Update customer balance
+      // Update customer balance (positive means customer owes us, negative means we owe customer)
       db.query(
         `UPDATE customers SET balance = ? WHERE id = ?`,
-        [outstanding, customer_id],
-        (err2) => callback(err2)
+        [totalOutstanding, customer_id],
+        (err2) => {
+          if (err2) return callback(err2);
+          callback(null, totalOutstanding);
+        }
       );
     }
   );
 };
 
+// // Helper function to add ledger entries
+// const addLedgerEntry = (data, callback) => {
+//   const { entry_type, reference_id, reference_table, customer_id, amount, description, debit, credit } = data;
+  
+//   const query = `
+//     INSERT INTO ledger_entries 
+//     (entry_type, reference_id, reference_table, customer_id, amount, debit, credit, description, created_at)
+//     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+//   `;
+  
+//   db.query(query, [
+//     entry_type, 
+//     reference_id, 
+//     reference_table, 
+//     customer_id || null, 
+//     amount || null,
+//     debit || 0,
+//     credit || 0,
+//     description || null
+//   ], (err, result) => {
+//     if (err) console.error('Error adding ledger entry:', err);
+//     if (callback) callback(err, result);
+//   });
+// };
+
 // Helper function to update booking payment summary
-const updateBookingPaymentSummary = (booking_id, callback) => {
+const updateBookingPaymentSummary = (bookingId, callback) => {
+  // Get total payments from booking_payments table
   db.query(
     `SELECT 
-       COALESCE(SUM(amount), 0) as total_paid
+       COALESCE(SUM(CASE WHEN payment_type IN ('advance', 'payment') THEN amount ELSE 0 END), 0) as total_paid,
+       COALESCE(SUM(CASE WHEN payment_type = 'security_deposit' THEN amount ELSE 0 END), 0) as total_deposit
      FROM booking_payments 
      WHERE booking_id = ?`,
-    [booking_id],
+    [bookingId],
     (err, result) => {
       if (err) return callback(err);
       
-      const totalPaid = Number(result[0]?.total_paid) || 0;
+      const totalPaid = Number(result[0]?.total_paid || 0);
+      const totalDeposit = Number(result[0]?.total_deposit || 0);
       
+      // Get booking total amount
       db.query(
-        `UPDATE bookings 
-         SET paid_amount = ?,
-             payment_status = CASE 
-               WHEN ? >= total_amount THEN 'paid'
-               WHEN ? > 0 THEN 'partial'
-               ELSE 'unpaid'
-             END
-         WHERE id = ?`,
-        [totalPaid, totalPaid, totalPaid, booking_id],
-        (err2) => callback(err2)
+        `SELECT total_amount, advance_amount FROM bookings WHERE id = ?`,
+        [bookingId],
+        (err2, bookingRows) => {
+          if (err2) return callback(err2);
+          if (!bookingRows.length) return callback(new Error("Booking not found"));
+          
+          const booking = bookingRows[0];
+          const totalAmount = Number(booking.total_amount);
+          const advanceAmount = Number(booking.advance_amount);
+          
+          // Calculate payment status
+          let paymentStatus = 'unpaid';
+          if (totalPaid >= totalAmount) {
+            paymentStatus = 'paid';
+          } else if (totalPaid > 0) {
+            paymentStatus = 'partial';
+          }
+          
+          // Update booking record
+          db.query(
+            `UPDATE bookings 
+             SET paid_amount = ?, 
+                 payment_status = ?,
+                 updated_at = NOW()
+             WHERE id = ?`,
+            [totalPaid - advanceAmount, paymentStatus, bookingId],
+            (err3) => {
+              if (err3) return callback(err3);
+              callback(null, { totalPaid, paymentStatus, totalDeposit });
+            }
+          );
+        }
       );
     }
   );
 };
+
 
 // Add Receipt function
 export const addReceipt = (req, res) => {
@@ -208,31 +313,240 @@ export const addReceipt = (req, res) => {
     return res.status(400).json({ message: "Amount required" });
   }
 
+  // Helper function to update owner earnings when payment is made
+  const updateOwnerAndCompanyEarnings = (bookingId, paymentAmount, callback) => {
+    // Get the owner earnings record for this booking
+    db.query(
+      `SELECT oe.*, b.total_amount 
+       FROM owner_earnings oe
+       JOIN bookings b ON oe.booking_id = b.id
+       WHERE oe.booking_id = ? AND oe.status = 'unpaid'`,
+      [bookingId],
+      (err, earningsRows) => {
+        if (err) return callback(err);
+        
+        if (earningsRows.length === 0) {
+          // No unpaid earnings found, might already be paid
+          return callback(null, { message: "No unpaid earnings found for this booking" });
+        }
+        
+        const earnings = earningsRows[0];
+        let remainingOwnerAmount = earnings.owner_amount;
+        let remainingCompanyAmount = earnings.company_amount;
+        let remainingPayment = paymentAmount;
+        
+        // First, pay company amount (company gets paid first)
+        let companyPaid = 0;
+        let ownerPaid = 0;
+        
+        if (remainingPayment > 0 && remainingCompanyAmount > 0) {
+          companyPaid = Math.min(remainingPayment, remainingCompanyAmount);
+          remainingCompanyAmount -= companyPaid;
+          remainingPayment -= companyPaid;
+        }
+        
+        // Then pay owner amount
+        if (remainingPayment > 0 && remainingOwnerAmount > 0) {
+          ownerPaid = Math.min(remainingPayment, remainingOwnerAmount);
+          remainingOwnerAmount -= ownerPaid;
+          remainingPayment -= ownerPaid;
+        }
+        
+        // Update owner_earnings record
+        const newOwnerAmount = remainingOwnerAmount;
+        const newCompanyAmount = remainingCompanyAmount;
+        const newStatus = (newOwnerAmount === 0 && newCompanyAmount === 0) ? 'paid' : 'unpaid';
+        
+        db.query(
+          `UPDATE owner_earnings 
+           SET owner_amount = ?, company_amount = ?, status = ?, updated_at = NOW()
+           WHERE id = ?`,
+          [newOwnerAmount, newCompanyAmount, newStatus, earnings.id],
+          (updateErr) => {
+            if (updateErr) return callback(updateErr);
+            
+            // Record payment distribution in a new table (optional - for tracking)
+            const distributionQuery = `
+              INSERT INTO earning_payments 
+              (earning_id, booking_id, company_paid, owner_paid, payment_date, created_at)
+              VALUES (?, ?, ?, ?, NOW(), NOW())
+            `;
+            
+            db.query(distributionQuery, [
+              earnings.id, bookingId, companyPaid, ownerPaid
+            ], (insertErr) => {
+              if (insertErr) console.error('Error recording payment distribution:', insertErr);
+              
+              callback(null, {
+                companyPaid,
+                ownerPaid,
+                remainingCompanyAmount: newCompanyAmount,
+                remainingOwnerAmount: newOwnerAmount,
+                status: newStatus
+              });
+            });
+          }
+        );
+      }
+    );
+  };
+
   // If customer_id provided, update their balance directly
   if (customer_id) {
+    // Check if this payment is for a previous booking
     db.query(
-      `INSERT INTO cash_receipts (amount, source, reference_id, payment_method, notes, customer_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-      [amount, source, reference_id || null, payment_method, notes, customer_id],
-      (err, result) => {
+      `SELECT b.id as booking_id, b.status, b.payment_status, b.customer_id
+       FROM bookings b
+       WHERE b.customer_id = ? AND b.payment_status IN ('unpaid', 'partial')
+       ORDER BY b.created_at ASC`,
+      [customer_id],
+      (err, bookings) => {
         if (err) {
-          console.error('Error inserting receipt:', err);
+          console.error('Error fetching customer bookings:', err);
           return res.status(500).json({ error: err.message });
         }
         
-        // Update customer balance
-        updateCustomerBalance(customer_id, (err2) => {
-          if (err2) {
-            console.error('Error updating balance:', err2);
-            return res.status(500).json({ error: err2.message });
+        let remainingAmount = Number(amount);
+        let processedBookings = [];
+        
+        // Process payments against outstanding bookings
+        const processNextBooking = (index) => {
+          if (index >= bookings.length || remainingAmount <= 0) {
+            // All payments processed or no more bookings
+            // Insert the receipt
+            db.query(
+              `INSERT INTO cash_receipts (amount, source, reference_id, payment_method, notes, customer_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+              [amount, source, reference_id || null, payment_method, notes, customer_id],
+              (err2, result) => {
+                if (err2) {
+                  console.error('Error inserting receipt:', err2);
+                  return res.status(500).json({ error: err2.message });
+                }
+                
+                // Update customer balance
+                updateCustomerBalance(customer_id, (err3) => {
+                  if (err3) {
+                    console.error('Error updating customer balance:', err3);
+                    return res.status(500).json({ error: err3.message });
+                  }
+                  
+                  res.json({
+                    success: true,
+                    message: "Receipt added & balances updated",
+                    receipt_id: result.insertId,
+                    payments_processed: processedBookings,
+                    remaining_amount: remainingAmount
+                  });
+                });
+              }
+            );
+            return;
           }
           
-          res.json({
-            success: true,
-            message: "Receipt added & customer balance updated",
-            receipt_id: result.insertId
-          });
-        });
+          const booking = bookings[index];
+          
+          // Get total paid for this booking
+          db.query(
+            `SELECT SUM(amount) as total_paid 
+             FROM booking_payments 
+             WHERE booking_id = ? AND payment_type IN ('advance', 'payment')`,
+            [booking.booking_id],
+            (err4, paymentResult) => {
+              if (err4) {
+                console.error('Error getting booking payments:', err4);
+                return processNextBooking(index + 1);
+              }
+              
+              db.query(
+                `SELECT total_amount FROM bookings WHERE id = ?`,
+                [booking.booking_id],
+                (err5, bookingResult) => {
+                  if (err5) {
+                    console.error('Error getting booking total:', err5);
+                    return processNextBooking(index + 1);
+                  }
+                  
+                  const totalAmount = Number(bookingResult[0].total_amount);
+                  const totalPaid = Number(paymentResult[0]?.total_paid || 0);
+                  const outstanding = totalAmount - totalPaid;
+                  
+                  if (outstanding <= 0) {
+                    return processNextBooking(index + 1);
+                  }
+                  
+                  const paymentForThisBooking = Math.min(remainingAmount, outstanding);
+                  
+                  // Insert payment record
+                  db.query(
+                    `INSERT INTO booking_payments (booking_id, payment_type, amount, payment_method, notes, created_at)
+                     VALUES (?, 'payment', ?, ?, ?, NOW())`,
+                    [booking.booking_id, paymentForThisBooking, payment_method, `Payment towards booking - ${notes || ''}`],
+                    (err6) => {
+                      if (err6) {
+                        console.error('Error inserting booking payment:', err6);
+                      }
+                      
+                      // Update booking payment summary
+                      updateBookingPaymentSummary(booking.booking_id, (err7) => {
+                        if (err7) {
+                          console.error('Error updating booking summary:', err7);
+                        }
+                        
+                        // Update owner and company earnings for this booking
+                        updateOwnerAndCompanyEarnings(booking.booking_id, paymentForThisBooking, (err8, distribution) => {
+                          if (err8) {
+                            console.error('Error updating owner/company earnings:', err8);
+                          }
+                          
+                          processedBookings.push({
+                            booking_id: booking.booking_id,
+                            amount: paymentForThisBooking,
+                            company_paid: distribution?.companyPaid || 0,
+                            owner_paid: distribution?.ownerPaid || 0
+                          });
+                          
+                          remainingAmount -= paymentForThisBooking;
+                          processNextBooking(index + 1);
+                        });
+                      });
+                    }
+                  );
+                }
+              );
+            }
+          );
+        };
+        
+        if (bookings.length === 0) {
+          // No outstanding bookings, just add as general receipt
+          db.query(
+            `INSERT INTO cash_receipts (amount, source, reference_id, payment_method, notes, customer_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+            [amount, source, reference_id || null, payment_method, notes, customer_id],
+            (err2, result) => {
+              if (err2) {
+                console.error('Error inserting receipt:', err2);
+                return res.status(500).json({ error: err2.message });
+              }
+              
+              updateCustomerBalance(customer_id, (err3) => {
+                if (err3) {
+                  console.error('Error updating customer balance:', err3);
+                  return res.status(500).json({ error: err3.message });
+                }
+                
+                res.json({
+                  success: true,
+                  message: "Receipt added (no outstanding bookings)",
+                  receipt_id: result.insertId
+                });
+              });
+            }
+          );
+        } else {
+          processNextBooking(0);
+        }
       }
     );
   }
@@ -249,9 +563,8 @@ export const addReceipt = (req, res) => {
         const booking = bRows[0];
         const customerId = booking.customer_id;
         const total = Number(booking.total_amount);
-        const advance = Number(booking.advance_amount);
         const paid = Number(booking.paid_amount);
-        const remaining = total - (advance + paid);
+        const remaining = total - paid;
         const payAmount = Number(amount);
 
         if (payAmount > remaining) {
@@ -292,10 +605,19 @@ export const addReceipt = (req, res) => {
                   return res.status(500).json({ error: err4.message });
                 }
                 
-                res.json({
-                  success: true,
-                  message: "Receipt added & booking updated",
-                  receipt_id: result.insertId,
+                // Update owner and company earnings for this payment
+                updateOwnerAndCompanyEarnings(reference_id, payAmount, (err5, distribution) => {
+                  if (err5) {
+                    console.error('Error updating owner/company earnings:', err5);
+                    // Don't fail the request, just log the error
+                  }
+                  
+                  res.json({
+                    success: true,
+                    message: "Receipt added & booking updated",
+                    receipt_id: result.insertId,
+                    earnings_distribution: distribution || null
+                  });
                 });
               });
             });
@@ -304,11 +626,11 @@ export const addReceipt = (req, res) => {
       },
     );
   } else {
-    // General receipt - FIXED: Include customer_id (even if NULL)
+    // General receipt - no owner/company updates needed
     db.query(
       `INSERT INTO cash_receipts (amount, source, reference_id, payment_method, notes, customer_id, created_at)
        VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-      [amount, source, reference_id || null, payment_method, notes, null], // Added null for customer_id
+      [amount, source, reference_id || null, payment_method, notes, null],
       (err, result) => {
         if (err) {
           console.error('Error inserting general receipt:', err);
@@ -324,106 +646,152 @@ export const addReceipt = (req, res) => {
   }
 };
 
-
-// UPDATE
+// UPDATE - Fixed version
 export const updateReceipt = (req, res) => {
   const { id } = req.params;
   const { amount, source, reference_id, payment_method, notes } = req.body;
 
-  // 1. old receipt get karo
+  // 1. Get old receipt
   db.query(`SELECT * FROM cash_receipts WHERE id=?`, [id], (err, rows) => {
-    if (err) return res.status(500).json(err);
+    if (err) return res.status(500).json({ error: err.message });
     if (!rows.length)
       return res.status(404).json({ message: "Receipt not found" });
 
     const oldReceipt = rows[0];
-
     const oldAmount = Number(oldReceipt.amount);
     const newAmount = Number(amount);
+    const diff = newAmount - oldAmount; // Positive = increase, Negative = decrease
 
-    const diff = newAmount - oldAmount; // 🔥 IMPORTANT
-
-    // 2. agar booking linked hai
+    // 2. If linked to booking
     if (oldReceipt.source === "booking" && oldReceipt.reference_id) {
       db.query(
-        `SELECT * FROM bookings WHERE id=?`,
+        `SELECT b.*, bp.total_paid 
+         FROM bookings b
+         LEFT JOIN (
+           SELECT booking_id, SUM(amount) as total_paid 
+           FROM booking_payments 
+           WHERE payment_type IN ('advance', 'payment')
+           GROUP BY booking_id
+         ) bp ON b.id = bp.booking_id
+         WHERE b.id=?`,
         [oldReceipt.reference_id],
         (err2, bRows) => {
-          if (err2) return res.status(500).json(err2);
+          if (err2) return res.status(500).json({ error: err2.message });
           if (!bRows.length)
             return res.status(404).json({ message: "Booking not found" });
 
           const booking = bRows[0];
+          const totalPaid = Number(booking.total_paid || 0);
+          const totalAmount = Number(booking.total_amount);
+          const remaining = totalAmount - totalPaid;
 
-          const total = Number(booking.total_amount);
-          const advance = Number(booking.advance_amount);
-          const paid = Number(booking.paid_amount);
-
-          const remaining = total - (advance + paid);
-
-          // ❌ overpayment check (sirf positive diff pe)
-          if (diff > 0 && diff > remaining) {
+          // Check overpayment (only for positive diff)
+          if (diff > 0 && diff > remaining + oldAmount) {
             return res.status(400).json({
-              message: `Update exceeds remaining amount (${remaining})`,
+              message: `Update would exceed remaining amount. Remaining: ${remaining}, Old receipt: ${oldAmount}`
             });
           }
 
-          // 3. receipt update
+          // 3. Update receipt
           db.query(
             `UPDATE cash_receipts 
-           SET amount=?, source=?, reference_id=?, payment_method=?, notes=? 
-           WHERE id=?`,
+             SET amount=?, source=?, reference_id=?, payment_method=?, notes=? 
+             WHERE id=?`,
             [newAmount, source, reference_id, payment_method, notes, id],
             (err3) => {
-              if (err3) return res.status(500).json(err3);
+              if (err3) return res.status(500).json({ error: err3.message });
 
-              // 4. booking_payments update
+              // 4. Update the latest booking_payment record for this receipt
               db.query(
                 `UPDATE booking_payments 
-               SET amount=?, payment_method=?, notes=? 
-               WHERE booking_id=? 
-               ORDER BY id DESC LIMIT 1`,
+                 SET amount=?, payment_method=?, notes=? 
+                 WHERE booking_id=? AND payment_type='payment'
+                 ORDER BY id DESC LIMIT 1`,
                 [newAmount, payment_method, notes, oldReceipt.reference_id],
+                (err4) => {
+                  if (err4) console.error('Error updating booking payment:', err4);
+                  
+                  // 5. Update booking payment summary
+                  updateBookingPaymentSummary(oldReceipt.reference_id, (err5) => {
+                    if (err5) {
+                      console.error('Error updating booking summary:', err5);
+                      return res.status(500).json({ error: err5.message });
+                    }
+
+                    // 6. Update customer balance with the difference
+                    updateCustomerBalance(booking.customer_id, (err6, newBalance) => {
+                      if (err6) {
+                        console.error('Error updating customer balance:', err6);
+                        return res.status(500).json({ error: err6.message });
+                      }
+
+                      // 7. Update owner earnings if amount changed
+                      if (diff !== 0) {
+                        updateOwnerAndCompanyEarnings(oldReceipt.reference_id, diff, (err7, distribution) => {
+                          if (err7) {
+                            console.error('Error updating owner earnings:', err7);
+                          }
+                          
+                          // Add ledger entry
+                          addLedgerEntry({
+                            entry_type: "receipt_update",
+                            reference_id: id,
+                            reference_table: "cash_receipts",
+                            customer_id: booking.customer_id,
+                            amount: Math.abs(diff),
+                            debit: diff > 0 ? diff : 0,
+                            credit: diff < 0 ? Math.abs(diff) : 0,
+                            description: `Receipt updated from ${oldAmount} to ${newAmount}`
+                          });
+                          
+                          res.json({
+                            success: true,
+                            message: "Receipt updated successfully",
+                            difference_applied: diff,
+                            new_balance: newBalance,
+                            earnings_distribution: distribution || null
+                          });
+                        });
+                      } else {
+                        res.json({
+                          success: true,
+                          message: "Receipt updated successfully (no amount change)",
+                          new_balance: newBalance
+                        });
+                      }
+                    });
+                  });
+                }
               );
-
-              // 5. update booking summary
-              updateBookingPaymentSummary(oldReceipt.reference_id, (err4) => {
-                if (err4) return res.status(500).json(err4);
-
-                // 6. update customer balance (diff apply)
-                db.query(
-                  `UPDATE customers SET balance = balance - ? WHERE id=?`,
-                  [diff, booking.customer_id],
-                );
-
-                addLedgerEntry({
-                  entry_type: "receipt",
-                  reference_id: result.insertId,
-                  reference_table: "cash_receipts",
-                  debit: payAmount,
-                  description: "Cash received",
-                });
-                res.json({
-                  message: "Receipt updated successfully",
-                  difference_applied: diff,
-                });
-              });
-            },
+            }
           );
-        },
+        }
       );
     } else {
-      // 🔥 normal receipt (non-booking)
+      // Non-booking receipt
       db.query(
         `UPDATE cash_receipts 
          SET amount=?, source=?, reference_id=?, payment_method=?, notes=? 
          WHERE id=?`,
         [newAmount, source, reference_id, payment_method, notes, id],
         (err5) => {
-          if (err5) return res.status(500).json(err5);
-
-          res.json({ message: "Receipt updated" });
-        },
+          if (err5) return res.status(500).json({ error: err5.message });
+          
+          // If receipt has customer_id, update balance
+          if (oldReceipt.customer_id) {
+            updateCustomerBalance(oldReceipt.customer_id, (err6, newBalance) => {
+              if (err6) console.error('Error updating customer balance:', err6);
+              
+              res.json({
+                success: true,
+                message: "Receipt updated",
+                new_balance: newBalance
+              });
+            });
+          } else {
+            res.json({ success: true, message: "Receipt updated" });
+          }
+        }
       );
     }
   });
@@ -469,73 +837,104 @@ export const getReceiptById = (req, res) => {
   });
 };
 
-// DELETE
+// DELETE receipt - Fixed version
 export const deleteReceipt = (req, res) => {
   const { id } = req.params;
 
-  // 1. get receipt
+  // Get receipt details before deletion
   db.query(`SELECT * FROM cash_receipts WHERE id=?`, [id], (err, rows) => {
-    if (err) return res.status(500).json(err);
+    if (err) return res.status(500).json({ error: err.message });
     if (!rows.length)
       return res.status(404).json({ message: "Receipt not found" });
 
     const receipt = rows[0];
     const amount = Number(receipt.amount);
 
-    // 🔥 if linked to booking
+    // If linked to booking, reverse the payment
     if (receipt.source === "booking" && receipt.reference_id) {
       db.query(
         `SELECT * FROM bookings WHERE id=?`,
         [receipt.reference_id],
         (err2, bRows) => {
-          if (err2) return res.status(500).json(err2);
-          if (!bRows.length)
-            return res.status(404).json({ message: "Booking not found" });
+          if (err2) return res.status(500).json({ error: err2.message });
+          if (!bRows.length) {
+            // No booking found, just delete receipt
+            deleteReceiptOnly(id, receipt, res);
+            return;
+          }
 
           const booking = bRows[0];
-          const customer_id = booking.customer_id;
-
-          // 2. delete receipt
-          db.query(`DELETE FROM cash_receipts WHERE id=?`, [id], (err3) => {
-            if (err3) return res.status(500).json(err3);
-
-            // 3. delete from booking_payments (⚠️ risky part)
-            db.query(
-              `DELETE FROM booking_payments 
-             WHERE booking_id=? 
+          
+          // Delete the associated booking_payment record
+          db.query(
+            `DELETE FROM booking_payments 
+             WHERE booking_id=? AND payment_type='payment' AND amount=?
              ORDER BY id DESC LIMIT 1`,
-              [receipt.reference_id],
-            );
-
-            // 4. update booking summary
-            updateBookingPaymentSummary(receipt.reference_id, (err4) => {
-              if (err4) return res.status(500).json(err4);
-
-              // 5. reverse customer balance
-              db.query(
-                `UPDATE customers SET balance = balance + ? WHERE id=?`,
-                [amount, customer_id],
-              );
-
-              res.json({
-                message: "Receipt deleted & reversed",
-                reversed_amount: amount,
+            [receipt.reference_id, amount],
+            (err3) => {
+              if (err3) console.error('Error deleting booking payment:', err3);
+              
+              // Update booking payment summary (reverse the payment)
+              updateBookingPaymentSummary(receipt.reference_id, (err4) => {
+                if (err4) console.error('Error updating booking summary:', err4);
+                
+                // Update customer balance (add back the amount)
+                updateCustomerBalance(booking.customer_id, (err5) => {
+                  if (err5) console.error('Error updating customer balance:', err5);
+                  
+                  // Reverse owner earnings
+                  updateOwnerAndCompanyEarnings(receipt.reference_id, -amount, (err6) => {
+                    if (err6) console.error('Error updating owner earnings:', err6);
+                    
+                    // Delete the receipt
+                    deleteReceiptOnly(id, receipt, res);
+                  });
+                });
               });
-            });
-          });
-        },
+            }
+          );
+        }
       );
     } else {
-      // 🔥 normal receipt
-      db.query(`DELETE FROM cash_receipts WHERE id=?`, [id], (err5) => {
-        if (err5) return res.status(500).json(err5);
-
-        res.json({ message: "Receipt deleted" });
-      });
+      // Non-booking receipt
+      if (receipt.customer_id) {
+        // Reverse the balance update
+        db.query(
+          `UPDATE customers SET balance = balance + ? WHERE id=?`,
+          [amount, receipt.customer_id],
+          (err2) => {
+            if (err2) console.error('Error updating customer balance:', err2);
+            deleteReceiptOnly(id, receipt, res);
+          }
+        );
+      } else {
+        deleteReceiptOnly(id, receipt, res);
+      }
     }
   });
 };
 
+// Helper function to delete receipt
+const deleteReceiptOnly = (id, receipt, res) => {
+  db.query(`DELETE FROM cash_receipts WHERE id=?`, [id], (err) => {
+    if (err) return res.status(500).json({ error: err.message });
+    
+    // Add ledger entry for deletion
+    addLedgerEntry({
+      entry_type: "receipt_deleted",
+      reference_id: id,
+      reference_table: "cash_receipts",
+      customer_id: receipt.customer_id,
+      amount: receipt.amount,
+      description: `Receipt deleted - Amount: ${receipt.amount}`
+    });
+    
+    res.json({
+      success: true,
+      message: "Receipt deleted successfully"
+    });
+  });
+};
 
 // In your cashReceiptsController.js
 export const getReceiptReport = (req, res) => {

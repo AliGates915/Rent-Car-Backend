@@ -292,6 +292,8 @@ export const createBooking = (req, res) => {
     });
   });
 };
+
+
 // ====================== UPDATE BOOKING ======================
 export const updateBooking = (req, res) => {
   const { id } = req.params;

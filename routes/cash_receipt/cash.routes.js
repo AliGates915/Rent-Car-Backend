@@ -19,8 +19,9 @@ import { protect } from "../../middlewares/auth.middleware.js";
 const router = express.Router();
 
 // Customer balance routes
-router.get('/customers/with-balance', getAllCustomersWithBalance);
-router.get('/customers/:customer_id/balance', getCustomerWithBalance);
+router.get('/customers-with-balance', getAllCustomersWithBalance);
+router.get('/customers/:customer_id/balance', getCustomerWithBalance);  // Changed from /customers/:customer_id/balance
+
 
 // IMPORTANT: Put specific routes BEFORE parameterized routes (/:id)
 router.get("/report-data", protect, getReceiptReportData); // For raw data - SPECIFIC
