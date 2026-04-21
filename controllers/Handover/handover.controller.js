@@ -1,4 +1,5 @@
 import { db } from "../../config/db.js";
+import { addLedgerEntry } from "../../utils/ledger.js";
 
 export const createHandover = (req, res) => {
     const {
@@ -30,6 +31,14 @@ export const createHandover = (req, res) => {
             });
         }
 
+        // Get booking details for ledger entry
+        const booking = bookingResult[0];
+        const customer_id = booking.customer_id;
+        const total_rental_amount = booking.total_amount || 0;
+        const booking_code = booking.booking_code;
+        const rent_type_id = booking.rent_type_id;
+        const rate_multiplier = booking.rate_multiplier;
+
         // Insert handover with separate date and time
         const insertHandover = `
             INSERT INTO vehicle_handover
@@ -44,7 +53,7 @@ export const createHandover = (req, res) => {
             [
                 booking_id,
                 vehicle_id,
-                handed_over_by,  // Now this is a string name
+                handed_over_by,
                 handover_date,
                 handover_time,
                 km_out,
@@ -58,30 +67,8 @@ export const createHandover = (req, res) => {
 
                 const handover_id = result.insertId;
 
-                // Insert accessories
-                if (accessories && accessories.length > 0) {
-                    const values = accessories.map((acc) => [
-                        handover_id,
-                        acc.accessory_type_id,
-                        acc.is_given,
-                        acc.remarks || null,
-                    ]);
-
-                    const insertAccessories = `
-                        INSERT INTO vehicle_handover_accessories
-                        (handover_id, accessory_type_id, is_given, remarks)
-                        VALUES ?
-                    `;
-
-                    db.query(insertAccessories, [values], (err) => {
-                        if (err) return res.status(500).json(err);
-                        updateStatus();
-                    });
-                } else {
-                    updateStatus();
-                }
-
-                function updateStatus() {
+                // Function to update status after everything is done
+                const updateStatus = () => {
                     db.query(
                         `UPDATE bookings SET status='ongoing' WHERE id=?`,
                         [booking_id],
@@ -105,6 +92,44 @@ export const createHandover = (req, res) => {
                             );
                         }
                     );
+                };
+
+                // Function to add ledger entry
+                const addLedgerEntryToDB = () => {
+                    addLedgerEntry({
+                        entry_type: "handover",
+                        reference_id: handover_id,
+                        reference_table: "vehicle_handover",
+                        customer_id: customer_id,
+                        vehicle_id: vehicle_id,
+                        credit: total_rental_amount,
+                        description: `Booking ${booking_code} - Vehicle handover${rent_type_id ? ` (${rate_multiplier}x multiplier applied)` : ''}`,
+                    });
+                };
+
+                // Insert accessories if any
+                if (accessories && accessories.length > 0) {
+                    const values = accessories.map((acc) => [
+                        handover_id,
+                        acc.accessory_type_id,
+                        acc.is_given,
+                        acc.remarks || null,
+                    ]);
+
+                    const insertAccessories = `
+                        INSERT INTO vehicle_handover_accessories
+                        (handover_id, accessory_type_id, is_given, remarks)
+                        VALUES ?
+                    `;
+
+                    db.query(insertAccessories, [values], (err) => {
+                        if (err) return res.status(500).json(err);
+                        addLedgerEntryToDB();
+                        updateStatus();
+                    });
+                } else {
+                    addLedgerEntryToDB();
+                    updateStatus();
                 }
             }
         );

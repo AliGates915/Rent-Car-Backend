@@ -238,16 +238,7 @@ export const createBooking = (req, res) => {
               );
             }
 
-            addLedgerEntry({
-              entry_type: "booking",
-              reference_id: result.insertId,
-              reference_table: "bookings",
-              customer_id,
-              vehicle_id,
-              credit: total_rental_amount,
-              description: `Booking ${booking_code} - Rental amount${rent_type_id ? ` (${rate_multiplier}x multiplier applied)` : ''}`,
-            });
-
+           
             // UPDATE VEHICLE STATUS
             updateVehicleStatus(vehicle_id, (err) => {
               if (err) console.error('Error updating vehicle status:', err);
@@ -293,7 +284,7 @@ export const createBooking = (req, res) => {
   });
 };
 
-
+ 
 // ====================== UPDATE BOOKING ======================
 export const updateBooking = (req, res) => {
   const { id } = req.params;
@@ -477,19 +468,6 @@ export const updateBooking = (req, res) => {
                     if (err3) console.error('Balance update error:', err3);
                   }
                 );
-                
-                if (typeof addLedgerEntry === 'function') {
-                  addLedgerEntry({
-                    entry_type: "booking",
-                    reference_id: id,
-                    reference_table: "bookings",
-                    customer_id: oldBooking.customer_id,
-                    vehicle_id: vehicle_id,
-                    credit: diff > 0 ? diff : 0,
-                    debit: diff < 0 ? Math.abs(diff) : 0,
-                    description: `Booking ${oldBooking.booking_code} updated - amount adjustment${rent_type_id ? ' (rent type changed)' : ''}`,
-                  });
-                }
               }
 
               // Return the dates in local format
@@ -631,17 +609,6 @@ export const cancelBooking = (req, res) => {
           [paid_amount, oldBooking.customer_id]
         );
       }
-
-      // Add ledger entry for cancellation
-      addLedgerEntry({
-        entry_type: "cancellation",
-        reference_id: id,
-        reference_table: "bookings",
-        customer_id: oldBooking.customer_id,
-        vehicle_id: oldBooking.vehicle_id,
-        debit: paid_amount,
-        description: `Booking ${oldBooking.booking_code} cancelled - payment reversed`,
-      });
 
       // ✅ UPDATE VEHICLE STATUS - after cancellation, check if vehicle becomes available
       updateVehicleStatus(oldBooking.vehicle_id, (err, newVehicleStatus) => {
