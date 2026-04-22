@@ -39,7 +39,7 @@ export const getCustomerWithBalance = (req, res) => {
           v.registration_no,
           v.owner_id,
           v.owner_percentage,
-          (b.total_amount - (b.advance_amount + b.paid_amount)) as remaining_amount,
+          (b.total_amount - b.paid_amount) as remaining_amount,
           oe.id as earning_id,
           oe.owner_amount,
           oe.company_amount,
@@ -60,7 +60,7 @@ export const getCustomerWithBalance = (req, res) => {
           const summary = {
             total_bookings: bookings.length,
             total_booking_amount: bookings.reduce((sum, b) => sum + (Number(b.total_amount) || 0), 0),
-            total_paid: bookings.reduce((sum, b) => sum + (Number(b.paid_amount) || 0) + (Number(b.advance_amount) || 0), 0),
+            total_paid: bookings.reduce((sum, b) => sum + (Number(b.paid_amount) || 0), 0),
             total_remaining: bookings.reduce((sum, b) => sum + (Number(b.remaining_amount) || 0), 0),
             payment_status_breakdown: {
               paid: bookings.filter(b => b.payment_status === 'paid').length,
@@ -128,8 +128,8 @@ export const getAllCustomersWithBalance = (req, res) => {
       COALESCE(c.balance, 0) as balance,
       COUNT(DISTINCT b.id) as total_bookings,
       COALESCE(SUM(b.total_amount), 0) as total_booking_amount,
-      COALESCE(SUM(b.advance_amount + b.paid_amount), 0) as total_paid_amount,
-      COALESCE(SUM(b.total_amount - (b.advance_amount + b.paid_amount)), 0) as total_remaining_amount,
+      COALESCE(SUM(b.paid_amount), 0) as total_paid_amount,
+      COALESCE(SUM(b.total_amount - b.paid_amount), 0) as total_remaining_amount,
       SUM(CASE WHEN b.payment_status = 'paid' THEN 1 ELSE 0 END) as paid_bookings,
       SUM(CASE WHEN b.payment_status = 'partial' THEN 1 ELSE 0 END) as partial_bookings,
       SUM(CASE WHEN b.payment_status = 'unpaid' THEN 1 ELSE 0 END) as unpaid_bookings,
@@ -150,10 +150,10 @@ export const getAllCustomersWithBalance = (req, res) => {
   }
 
   sql += ` GROUP BY c.id`;
-  
+
   // Only show customers with balance > 0 or remaining amount > 0
   sql += ` HAVING balance > 0 OR total_remaining_amount > 0`;
-  
+
   sql += ` ORDER BY balance DESC, total_remaining_amount DESC`;
 
   db.query(sql, params, (err, rows) => {
@@ -168,7 +168,7 @@ export const getAllCustomersWithBalance = (req, res) => {
         id: row.id,
         customer_name: row.customer_name,
         phone_no: row.phone_no,
-        cnic_no: row.cnic_no,                                                               
+        cnic_no: row.cnic_no,
         address: row.address,
         balance: Number(row.balance) || 0,
         total_bookings: Number(row.total_bookings) || 0,
@@ -202,7 +202,7 @@ const updateCustomerBalance = (customer_id, callback) => {
     [customer_id],
     (err, bookings) => {
       if (err) return callback(err);
-      
+
       let totalOutstanding = 0;
       bookings.forEach(booking => {
         const outstanding = Number(booking.total_amount) - Number(booking.total_paid);
@@ -210,7 +210,7 @@ const updateCustomerBalance = (customer_id, callback) => {
           totalOutstanding += outstanding;
         }
       });
-      
+
       // Update customer balance (positive means customer owes us, negative means we owe customer)
       db.query(
         `UPDATE customers SET balance = ? WHERE id = ?`,
@@ -227,13 +227,13 @@ const updateCustomerBalance = (customer_id, callback) => {
 // // Helper function to add ledger entries
 // const addLedgerEntry = (data, callback) => {
 //   const { entry_type, reference_id, reference_table, customer_id, amount, description, debit, credit } = data;
-  
+
 //   const query = `
 //     INSERT INTO ledger_entries 
 //     (entry_type, reference_id, reference_table, customer_id, amount, debit, credit, description, created_at)
 //     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
 //   `;
-  
+
 //   db.query(query, [
 //     entry_type, 
 //     reference_id, 
@@ -249,7 +249,6 @@ const updateCustomerBalance = (customer_id, callback) => {
 //   });
 // };
 
-// Helper function to update booking payment summary
 const updateBookingPaymentSummary = (bookingId, callback) => {
   // Get total payments from booking_payments table
   db.query(
@@ -261,10 +260,10 @@ const updateBookingPaymentSummary = (bookingId, callback) => {
     [bookingId],
     (err, result) => {
       if (err) return callback(err);
-      
+
       const totalPaid = Number(result[0]?.total_paid || 0);
       const totalDeposit = Number(result[0]?.total_deposit || 0);
-      
+
       // Get booking total amount
       db.query(
         `SELECT total_amount, advance_amount FROM bookings WHERE id = ?`,
@@ -272,11 +271,10 @@ const updateBookingPaymentSummary = (bookingId, callback) => {
         (err2, bookingRows) => {
           if (err2) return callback(err2);
           if (!bookingRows.length) return callback(new Error("Booking not found"));
-          
+
           const booking = bookingRows[0];
           const totalAmount = Number(booking.total_amount);
-          const advanceAmount = Number(booking.advance_amount);
-          
+
           // Calculate payment status
           let paymentStatus = 'unpaid';
           if (totalPaid >= totalAmount) {
@@ -284,15 +282,15 @@ const updateBookingPaymentSummary = (bookingId, callback) => {
           } else if (totalPaid > 0) {
             paymentStatus = 'partial';
           }
-          
-          // Update booking record
+
+          // Update booking record - FIXED: Use totalPaid directly
           db.query(
             `UPDATE bookings 
              SET paid_amount = ?, 
                  payment_status = ?,
                  updated_at = NOW()
              WHERE id = ?`,
-            [totalPaid - advanceAmount, paymentStatus, bookingId],
+            [totalPaid, paymentStatus, bookingId],  // ← FIXED: removed subtraction
             (err3) => {
               if (err3) return callback(err3);
               callback(null, { totalPaid, paymentStatus, totalDeposit });
@@ -303,7 +301,6 @@ const updateBookingPaymentSummary = (bookingId, callback) => {
     }
   );
 };
-
 
 // Add Receipt function
 export const addReceipt = (req, res) => {
@@ -324,39 +321,39 @@ export const addReceipt = (req, res) => {
       [bookingId],
       (err, earningsRows) => {
         if (err) return callback(err);
-        
+
         if (earningsRows.length === 0) {
           // No unpaid earnings found, might already be paid
           return callback(null, { message: "No unpaid earnings found for this booking" });
         }
-        
+
         const earnings = earningsRows[0];
         let remainingOwnerAmount = earnings.owner_amount;
         let remainingCompanyAmount = earnings.company_amount;
         let remainingPayment = paymentAmount;
-        
+
         // First, pay company amount (company gets paid first)
         let companyPaid = 0;
         let ownerPaid = 0;
-        
+
         if (remainingPayment > 0 && remainingCompanyAmount > 0) {
           companyPaid = Math.min(remainingPayment, remainingCompanyAmount);
           remainingCompanyAmount -= companyPaid;
           remainingPayment -= companyPaid;
         }
-        
+
         // Then pay owner amount
         if (remainingPayment > 0 && remainingOwnerAmount > 0) {
           ownerPaid = Math.min(remainingPayment, remainingOwnerAmount);
           remainingOwnerAmount -= ownerPaid;
           remainingPayment -= ownerPaid;
         }
-        
+
         // Update owner_earnings record
         const newOwnerAmount = remainingOwnerAmount;
         const newCompanyAmount = remainingCompanyAmount;
         const newStatus = (newOwnerAmount === 0 && newCompanyAmount === 0) ? 'paid' : 'unpaid';
-        
+
         db.query(
           `UPDATE owner_earnings 
            SET owner_amount = ?, company_amount = ?, status = ?, updated_at = NOW()
@@ -364,19 +361,19 @@ export const addReceipt = (req, res) => {
           [newOwnerAmount, newCompanyAmount, newStatus, earnings.id],
           (updateErr) => {
             if (updateErr) return callback(updateErr);
-            
+
             // Record payment distribution in a new table (optional - for tracking)
             const distributionQuery = `
               INSERT INTO earning_payments 
               (earning_id, booking_id, company_paid, owner_paid, payment_date, created_at)
               VALUES (?, ?, ?, ?, NOW(), NOW())
             `;
-            
+
             db.query(distributionQuery, [
               earnings.id, bookingId, companyPaid, ownerPaid
             ], (insertErr) => {
               if (insertErr) console.error('Error recording payment distribution:', insertErr);
-              
+
               callback(null, {
                 companyPaid,
                 ownerPaid,
@@ -405,10 +402,10 @@ export const addReceipt = (req, res) => {
           console.error('Error fetching customer bookings:', err);
           return res.status(500).json({ error: err.message });
         }
-        
+
         let remainingAmount = Number(amount);
         let processedBookings = [];
-        
+
         // Process payments against outstanding bookings
         const processNextBooking = (index) => {
           if (index >= bookings.length || remainingAmount <= 0) {
@@ -423,14 +420,14 @@ export const addReceipt = (req, res) => {
                   console.error('Error inserting receipt:', err2);
                   return res.status(500).json({ error: err2.message });
                 }
-                
+
                 // Update customer balance
                 updateCustomerBalance(customer_id, (err3) => {
                   if (err3) {
                     console.error('Error updating customer balance:', err3);
                     return res.status(500).json({ error: err3.message });
                   }
-                  
+
                   res.json({
                     success: true,
                     message: "Receipt added & balances updated",
@@ -443,9 +440,9 @@ export const addReceipt = (req, res) => {
             );
             return;
           }
-          
+
           const booking = bookings[index];
-          
+
           // Get total paid for this booking
           db.query(
             `SELECT SUM(amount) as total_paid 
@@ -457,7 +454,7 @@ export const addReceipt = (req, res) => {
                 console.error('Error getting booking payments:', err4);
                 return processNextBooking(index + 1);
               }
-              
+
               db.query(
                 `SELECT total_amount FROM bookings WHERE id = ?`,
                 [booking.booking_id],
@@ -466,17 +463,17 @@ export const addReceipt = (req, res) => {
                     console.error('Error getting booking total:', err5);
                     return processNextBooking(index + 1);
                   }
-                  
+
                   const totalAmount = Number(bookingResult[0].total_amount);
                   const totalPaid = Number(paymentResult[0]?.total_paid || 0);
                   const outstanding = totalAmount - totalPaid;
-                  
+
                   if (outstanding <= 0) {
                     return processNextBooking(index + 1);
                   }
-                  
+
                   const paymentForThisBooking = Math.min(remainingAmount, outstanding);
-                  
+
                   // Insert payment record
                   db.query(
                     `INSERT INTO booking_payments (booking_id, payment_type, amount, payment_method, notes, created_at)
@@ -486,26 +483,26 @@ export const addReceipt = (req, res) => {
                       if (err6) {
                         console.error('Error inserting booking payment:', err6);
                       }
-                      
+
                       // Update booking payment summary
                       updateBookingPaymentSummary(booking.booking_id, (err7) => {
                         if (err7) {
                           console.error('Error updating booking summary:', err7);
                         }
-                        
+
                         // Update owner and company earnings for this booking
                         updateOwnerAndCompanyEarnings(booking.booking_id, paymentForThisBooking, (err8, distribution) => {
                           if (err8) {
                             console.error('Error updating owner/company earnings:', err8);
                           }
-                          
+
                           processedBookings.push({
                             booking_id: booking.booking_id,
                             amount: paymentForThisBooking,
                             company_paid: distribution?.companyPaid || 0,
                             owner_paid: distribution?.ownerPaid || 0
                           });
-                          
+
                           remainingAmount -= paymentForThisBooking;
                           processNextBooking(index + 1);
                         });
@@ -517,7 +514,7 @@ export const addReceipt = (req, res) => {
             }
           );
         };
-        
+
         if (bookings.length === 0) {
           // No outstanding bookings, just add as general receipt
           db.query(
@@ -529,13 +526,13 @@ export const addReceipt = (req, res) => {
                 console.error('Error inserting receipt:', err2);
                 return res.status(500).json({ error: err2.message });
               }
-              
+
               updateCustomerBalance(customer_id, (err3) => {
                 if (err3) {
                   console.error('Error updating customer balance:', err3);
                   return res.status(500).json({ error: err3.message });
                 }
-                
+
                 res.json({
                   success: true,
                   message: "Receipt added (no outstanding bookings)",
@@ -604,14 +601,14 @@ export const addReceipt = (req, res) => {
                   console.error('Error updating customer balance:', err4);
                   return res.status(500).json({ error: err4.message });
                 }
-                
+
                 // Update owner and company earnings for this payment
                 updateOwnerAndCompanyEarnings(reference_id, payAmount, (err5, distribution) => {
                   if (err5) {
                     console.error('Error updating owner/company earnings:', err5);
                     // Don't fail the request, just log the error
                   }
-                  
+
                   res.json({
                     success: true,
                     message: "Receipt added & booking updated",
@@ -710,7 +707,7 @@ export const updateReceipt = (req, res) => {
                 [newAmount, payment_method, notes, oldReceipt.reference_id],
                 (err4) => {
                   if (err4) console.error('Error updating booking payment:', err4);
-                  
+
                   // 5. Update booking payment summary
                   updateBookingPaymentSummary(oldReceipt.reference_id, (err5) => {
                     if (err5) {
@@ -731,7 +728,7 @@ export const updateReceipt = (req, res) => {
                           if (err7) {
                             console.error('Error updating owner earnings:', err7);
                           }
-                          
+
                           // Add ledger entry
                           addLedgerEntry({
                             entry_type: "receipt_update",
@@ -743,7 +740,7 @@ export const updateReceipt = (req, res) => {
                             credit: diff < 0 ? Math.abs(diff) : 0,
                             description: `Receipt updated from ${oldAmount} to ${newAmount}`
                           });
-                          
+
                           res.json({
                             success: true,
                             message: "Receipt updated successfully",
@@ -776,12 +773,12 @@ export const updateReceipt = (req, res) => {
         [newAmount, source, reference_id, payment_method, notes, id],
         (err5) => {
           if (err5) return res.status(500).json({ error: err5.message });
-          
+
           // If receipt has customer_id, update balance
           if (oldReceipt.customer_id) {
             updateCustomerBalance(oldReceipt.customer_id, (err6, newBalance) => {
               if (err6) console.error('Error updating customer balance:', err6);
-              
+
               res.json({
                 success: true,
                 message: "Receipt updated",
@@ -817,7 +814,7 @@ export const getReceipts = (req, res) => {
     LEFT JOIN customers c ON cr.customer_id = c.id
     ORDER BY cr.id DESC
   `;
-  
+
   db.query(query, (err, rows) => {
     if (err) return res.status(500).json(err);
     res.json(rows);
@@ -864,7 +861,7 @@ export const deleteReceipt = (req, res) => {
           }
 
           const booking = bRows[0];
-          
+
           // Delete the associated booking_payment record
           db.query(
             `DELETE FROM booking_payments 
@@ -873,19 +870,19 @@ export const deleteReceipt = (req, res) => {
             [receipt.reference_id, amount],
             (err3) => {
               if (err3) console.error('Error deleting booking payment:', err3);
-              
+
               // Update booking payment summary (reverse the payment)
               updateBookingPaymentSummary(receipt.reference_id, (err4) => {
                 if (err4) console.error('Error updating booking summary:', err4);
-                
+
                 // Update customer balance (add back the amount)
                 updateCustomerBalance(booking.customer_id, (err5) => {
                   if (err5) console.error('Error updating customer balance:', err5);
-                  
+
                   // Reverse owner earnings
                   updateOwnerAndCompanyEarnings(receipt.reference_id, -amount, (err6) => {
                     if (err6) console.error('Error updating owner earnings:', err6);
-                    
+
                     // Delete the receipt
                     deleteReceiptOnly(id, receipt, res);
                   });
@@ -918,7 +915,7 @@ export const deleteReceipt = (req, res) => {
 const deleteReceiptOnly = (id, receipt, res) => {
   db.query(`DELETE FROM cash_receipts WHERE id=?`, [id], (err) => {
     if (err) return res.status(500).json({ error: err.message });
-    
+
     // Add ledger entry for deletion
     addLedgerEntry({
       entry_type: "receipt_deleted",
@@ -928,7 +925,7 @@ const deleteReceiptOnly = (id, receipt, res) => {
       amount: receipt.amount,
       description: `Receipt deleted - Amount: ${receipt.amount}`
     });
-    
+
     res.json({
       success: true,
       message: "Receipt deleted successfully"
@@ -939,12 +936,12 @@ const deleteReceiptOnly = (id, receipt, res) => {
 // In your cashReceiptsController.js
 export const getReceiptReport = (req, res) => {
   console.log("Fetching receipt report...");
-  
+
   const { start_date, end_date } = req.query;
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
   const offset = (page - 1) * limit;
-  
+
   let query = `
     SELECT 
       cr.*,
@@ -953,15 +950,15 @@ export const getReceiptReport = (req, res) => {
     FROM cash_receipts cr
     LEFT JOIN customers c ON cr.customer_id = c.id
   `;
-  
+
   let countQuery = `
     SELECT COUNT(*) as total
     FROM cash_receipts cr
     LEFT JOIN customers c ON cr.customer_id = c.id
   `;
-  
+
   const params = [];
-  
+
   // Add date filter if provided
   if (start_date && end_date) {
     const whereClause = ` WHERE DATE(cr.created_at) BETWEEN ? AND ?`;
@@ -969,25 +966,25 @@ export const getReceiptReport = (req, res) => {
     countQuery += whereClause;
     params.push(start_date, end_date);
   }
-  
+
   query += ` ORDER BY cr.created_at DESC LIMIT ? OFFSET ?`;
-  
+
   // Get total count
   db.query(countQuery, params.slice(0, 2), (err, countResult) => {
     if (err) {
       console.error('Error fetching count:', err);
       return res.status(500).json({ error: err.message });
     }
-    
+
     const total = countResult[0]?.total || 0;
-    
+
     // Get paginated data
     db.query(query, [...params, limit, offset], (err, rows) => {
       if (err) {
         console.error('Error fetching receipt report:', err);
         return res.status(500).json({ error: err.message });
       }
-      
+
       // Return in the format expected by useFetch
       res.json({
         data: rows,
@@ -1003,9 +1000,9 @@ export const getReceiptReport = (req, res) => {
 
 export const getReceiptReportData = (req, res) => {
   console.log("Fetching raw receipt report data...");
-  
+
   const { start_date, end_date } = req.query;
-  
+
   let query = `
     SELECT 
       cr.*,
@@ -1014,17 +1011,17 @@ export const getReceiptReportData = (req, res) => {
     FROM cash_receipts cr
     LEFT JOIN customers c ON cr.customer_id = c.id
   `;
-  
+
   const params = [];
-  
+
   // Add date filter ONLY if both dates are provided
   if (start_date && end_date) {
     query += ` WHERE DATE(cr.created_at) BETWEEN ? AND ?`;
     params.push(start_date, end_date);
   }
-  
+
   query += ` ORDER BY cr.created_at DESC`;
-  
+
   db.query(query, params, (err, rows) => {
     if (err) {
       console.error('Error fetching receipt report:', err);
@@ -1037,9 +1034,9 @@ export const getReceiptReportData = (req, res) => {
 // If you want to support single date or optional dates with more flexibility
 export const getReceiptReportDataFlexible = (req, res) => {
   console.log("Fetching raw receipt report data with flexible date filtering...");
-  
+
   const { start_date, end_date } = req.query;
-  
+
   let query = `
     SELECT 
       cr.*,
@@ -1048,10 +1045,10 @@ export const getReceiptReportDataFlexible = (req, res) => {
     FROM cash_receipts cr
     LEFT JOIN customers c ON cr.customer_id = c.id
   `;
-  
+
   const conditions = [];
   const params = [];
-  
+
   // Handle different date scenarios
   if (start_date && end_date) {
     // Both dates provided - date range
@@ -1066,14 +1063,14 @@ export const getReceiptReportDataFlexible = (req, res) => {
     conditions.push(`DATE(cr.created_at) <= ?`);
     params.push(end_date);
   }
-  
+
   // Add WHERE clause if there are conditions
   if (conditions.length > 0) {
     query += ` WHERE ` + conditions.join(' AND ');
   }
-  
+
   query += ` ORDER BY cr.created_at DESC`;
-  
+
   db.query(query, params, (err, rows) => {
     if (err) {
       console.error('Error fetching receipt report:', err);
@@ -1086,11 +1083,11 @@ export const getReceiptReportDataFlexible = (req, res) => {
 // Alternative: Get receipts by specific date range
 export const getReceiptsByDateRange = (req, res) => {
   const { from, to } = req.query;
-  
+
   if (!from || !to) {
     return res.status(400).json({ message: "From and To dates are required" });
   }
-  
+
   const query = `
     SELECT 
       cr.*,
@@ -1101,7 +1098,7 @@ export const getReceiptsByDateRange = (req, res) => {
     WHERE DATE(cr.created_at) BETWEEN ? AND ?
     ORDER BY cr.created_at DESC
   `;
-  
+
   db.query(query, [from, to], (err, rows) => {
     if (err) {
       console.error('Error fetching receipts by date range:', err);
@@ -1114,7 +1111,7 @@ export const getReceiptsByDateRange = (req, res) => {
 // Get summary statistics for dashboard
 export const getReceiptSummary = (req, res) => {
   const { start_date, end_date } = req.query;
-  
+
   let query = `
     SELECT 
       COUNT(*) as total_count,
@@ -1126,14 +1123,14 @@ export const getReceiptSummary = (req, res) => {
       AVG(amount) as average_amount
     FROM cash_receipts cr
   `;
-  
+
   const params = [];
-  
+
   if (start_date && end_date) {
     query += ` WHERE DATE(cr.created_at) BETWEEN ? AND ?`;
     params.push(start_date, end_date);
   }
-  
+
   db.query(query, params, (err, rows) => {
     if (err) {
       console.error('Error fetching receipt summary:', err);
@@ -1146,9 +1143,9 @@ export const getReceiptSummary = (req, res) => {
 // Get grouped receipts by date
 export const getReceiptsGrouped = (req, res) => {
   const { start_date, end_date, group_by = 'day' } = req.query;
-  
+
   let dateFormat;
-  switch(group_by) {
+  switch (group_by) {
     case 'week':
       dateFormat = 'YEARWEEK(created_at)';
       break;
@@ -1158,7 +1155,7 @@ export const getReceiptsGrouped = (req, res) => {
     default: // day
       dateFormat = 'DATE(created_at)';
   }
-  
+
   const query = `
     SELECT 
       ${dateFormat} as period,
@@ -1174,7 +1171,7 @@ export const getReceiptsGrouped = (req, res) => {
     GROUP BY period
     ORDER BY period_start ASC
   `;
-  
+
   db.query(query, [start_date, end_date], (err, rows) => {
     if (err) {
       console.error('Error fetching grouped receipts:', err);

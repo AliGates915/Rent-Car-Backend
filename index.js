@@ -22,6 +22,7 @@ import ownerEarningRoutes from "./routes/owner/ownerEarning.routes.js";
 import ownerRoutes from "./routes/owner/owner.routes.js";
 import dayBook from "./routes/daybook/daybook.routes.js";
 import { userRoutes } from "./routes/user.routes.js";
+import dashboardRoutes from './routes/dashboardRoutes.js';
 
 dotenv.config();
 
@@ -51,6 +52,8 @@ app.use('/api/maintenance', maintenanceRoutes);
 app.use("/api/owner-earnings", ownerEarningRoutes);
 app.use("/api/owners", ownerRoutes);
 app.use("/api/daybook", dayBook);
+app.use('/api/dashboard', dashboardRoutes);
+
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
