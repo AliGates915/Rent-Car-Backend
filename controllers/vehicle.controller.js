@@ -1,14 +1,11 @@
-import { db } from "../config/db.js";
+import { pool } from "../config/db.js";
 import { cloudinary } from "../config/cloudinary.js";
 
 // CREATE
-export const createVehicle = (req, res) => {
-  // console.log('Request body:', req.body);
-  // console.log('Files:', req.files);
-
+export const createVehicle = async (req, res) => {
   const {
     registration_no,
-     owner_id,
+    owner_id,
     car_type,
     car_make,
     car_model,
@@ -36,7 +33,7 @@ export const createVehicle = (req, res) => {
 
   const sql = `
     INSERT INTO vehicles (
-      registration_no,  owner_id, car_type, car_make, car_model, year_of_model,
+      registration_no, owner_id, car_type, car_make, car_model, year_of_model,
       rate_per_day, color, transmission_type, fuel_type,
       engine_capacity, seating_capacity, location,
       air_conditioner, heater, sunroof, android,
@@ -45,11 +42,10 @@ export const createVehicle = (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
-  db.query(
-    sql,
-    [
+  try {
+    const [result] = await pool.query(sql, [
       registration_no,
-       owner_id,
+      owner_id,
       car_type,
       car_make,
       car_model,
@@ -68,56 +64,48 @@ export const createVehicle = (req, res) => {
       front_camera || 0,
       rear_camera || 0,
       status || "available",
-    ],
-    (err, result) => {
-      if (err) {
-        console.error('Database error:', err);
-        return res.status(500).json({ error: err.message });
-      }
+    ]);
 
-      const vehicleId = result.insertId;
+    const vehicleId = result.insertId;
 
-      // Handle multiple image uploads
-      if (req.files && req.files.length > 0) {
-        const imageValues = req.files.map((file) => [
-          vehicleId,
-          file.path || file.secure_url || file.url, // Cloudinary URL
-          file.public_id || `vehicle_${vehicleId}_${Date.now()}`, // Cloudinary public_id
-        ]);
+    // Handle multiple image uploads
+    if (req.files && req.files.length > 0) {
+      const imageValues = req.files.map((file) => [
+        vehicleId,
+        file.path || file.secure_url || file.url,
+        file.public_id || `vehicle_${vehicleId}_${Date.now()}`,
+      ]);
 
-        // console.log('Inserting images:', imageValues);
-
-        const insertSql = "INSERT INTO vehicle_images (vehicle_id, image_url, public_id) VALUES ?";
-        
-        db.query(insertSql, [imageValues], (imgErr, imgResult) => {
-          if (imgErr) {
-            console.error('Image insert error:', imgErr);
-            return res.status(500).json({ 
-              message: "Vehicle created but images failed to save", 
-              id: vehicleId,
-              imageError: imgErr.message
-            });
-          }
-          // console.log('Images inserted successfully:', imgResult);
-          res.json({ message: "Vehicle created successfully with images", id: vehicleId });
+      const insertSql = "INSERT INTO vehicle_images (vehicle_id, image_url, public_id) VALUES ?";
+      
+      try {
+        await pool.query(insertSql, [imageValues]);
+        res.json({ message: "Vehicle created successfully with images", id: vehicleId });
+      } catch (imgErr) {
+        console.error('Image insert error:', imgErr);
+        res.status(500).json({ 
+          message: "Vehicle created but images failed to save", 
+          id: vehicleId,
+          imageError: imgErr.message
         });
-      } else {
-        res.json({ message: "Vehicle created successfully (no images)", id: vehicleId });
       }
+    } else {
+      res.json({ message: "Vehicle created successfully (no images)", id: vehicleId });
     }
-  );
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: err.message });
+  }
 };
+
 // Update Vehicle
-export const updateVehicle = (req, res) => {
+export const updateVehicle = async (req, res) => {
   const vehicleId = req.params.id;
-  
-  // console.log('Update Request body:', req.body);
-  // console.log('Update Request files:', req.files);
   
   const {
     registration_no,
     car_type,
-     owner_id,
+    owner_id,
     car_make,
     car_model,
     year_of_model,
@@ -148,7 +136,7 @@ export const updateVehicle = (req, res) => {
 
   const sql = `
     UPDATE vehicles SET
-      registration_no = ?,  owner_id = ?, car_type = ?, car_make = ?, car_model = ?,
+      registration_no = ?, owner_id = ?, car_type = ?, car_make = ?, car_model = ?,
       year_of_model = ?, rate_per_day = ?, color = ?, transmission_type = ?,
       fuel_type = ?, engine_capacity = ?, seating_capacity = ?, location = ?,
       air_conditioner = ?, heater = ?, sunroof = ?, android = ?,
@@ -156,9 +144,8 @@ export const updateVehicle = (req, res) => {
     WHERE id = ?
   `;
 
-  db.query(
-    sql,
-    [
+  try {
+    await pool.query(sql, [
       registration_no,
       owner_id,
       car_type,
@@ -180,73 +167,57 @@ export const updateVehicle = (req, res) => {
       rear_camera !== undefined ? (rear_camera === '1' || rear_camera === 1 || rear_camera === true ? 1 : 0) : 0,
       status || "available",
       vehicleId,
-    ],
-    (err, result) => {
-      if (err) {
-        console.error('Update error:', err);
-        return res.status(500).json({ error: err.message });
+    ]);
+
+    // Handle image deletions if requested
+    if (deleteImages) {
+      let imagesToDelete = deleteImages;
+      if (typeof deleteImages === 'string') {
+        try {
+          imagesToDelete = JSON.parse(deleteImages);
+        } catch (e) {
+          imagesToDelete = [deleteImages];
+        }
       }
-
-      // Function to handle image operations after update
-      const handleImages = () => {
-        // Handle image deletions if requested
-        if (deleteImages) {
-          let imagesToDelete = deleteImages;
-          if (typeof deleteImages === 'string') {
-            try {
-              imagesToDelete = JSON.parse(deleteImages);
-            } catch (e) {
-              imagesToDelete = [deleteImages];
-            }
-          }
-          
-          if (imagesToDelete.length > 0) {
-            const placeholders = imagesToDelete.map(() => '?').join(',');
-            const deleteSql = `DELETE FROM vehicle_images WHERE vehicle_id = ? AND public_id IN (${placeholders})`;
-            db.query(deleteSql, [vehicleId, ...imagesToDelete], (delErr) => {
-              if (delErr) {
-                console.error('Image deletion error:', delErr);
-              }
-            });
-          }
-        }
-
-        // Handle new images if uploaded
-        if (req.files && req.files.length > 0) {
-          const imageValues = req.files.map((file) => [
-            vehicleId,
-            file.path || file.secure_url || file.url, // Cloudinary URL
-            file.public_id || `vehicle_${vehicleId}_${Date.now()}`, // Cloudinary public_id
-          ]);
-
-          console.log('Inserting new images:', imageValues);
-
-          const insertSql = "INSERT INTO vehicle_images (vehicle_id, image_url, public_id) VALUES ?";
-          
-          db.query(insertSql, [imageValues], (imgErr, imgResult) => {
-            if (imgErr) {
-              console.error('Image insert error:', imgErr);
-              return res.status(500).json({ 
-                message: "Vehicle updated but images failed to save",
-                error: imgErr.message 
-              });
-            }
-            console.log('Images inserted successfully:', imgResult);
-            res.json({ message: "Vehicle updated successfully with images", id: vehicleId });
-          });
-        } else {
-          res.json({ message: "Vehicle updated successfully", id: vehicleId });
-        }
-      };
-
-      // Execute image handling
-      handleImages();
+      
+      if (imagesToDelete.length > 0) {
+        const placeholders = imagesToDelete.map(() => '?').join(',');
+        const deleteSql = `DELETE FROM vehicle_images WHERE vehicle_id = ? AND public_id IN (${placeholders})`;
+        await pool.query(deleteSql, [vehicleId, ...imagesToDelete]);
+      }
     }
-  );
+
+    // Handle new images if uploaded
+    if (req.files && req.files.length > 0) {
+      const imageValues = req.files.map((file) => [
+        vehicleId,
+        file.path || file.secure_url || file.url,
+        file.public_id || `vehicle_${vehicleId}_${Date.now()}`,
+      ]);
+
+      const insertSql = "INSERT INTO vehicle_images (vehicle_id, image_url, public_id) VALUES ?";
+      
+      try {
+        await pool.query(insertSql, [imageValues]);
+        res.json({ message: "Vehicle updated successfully with images", id: vehicleId });
+      } catch (imgErr) {
+        console.error('Image insert error:', imgErr);
+        res.status(500).json({ 
+          message: "Vehicle updated but images failed to save",
+          error: imgErr.message 
+        });
+      }
+    } else {
+      res.json({ message: "Vehicle updated successfully", id: vehicleId });
+    }
+  } catch (err) {
+    console.error('Update error:', err);
+    res.status(500).json({ error: err.message });
+  }
 };
 
 // Get All Vehicles
-export const getVehicles = (req, res) => {
+export const getVehicles = async (req, res) => {
   const search = req.query.search || '';
   const status = req.query.status || '';
   const car_type = req.query.car_type || '';
@@ -286,11 +257,8 @@ export const getVehicles = (req, res) => {
     ORDER BY v.id DESC
   `;
   
-  db.query(sql, queryParams, (err, rows) => {
-    if (err) {
-      console.error('Query error:', err);
-      return res.status(500).json({ error: err.message });
-    }
+  try {
+    const [rows] = await pool.query(sql, queryParams);
     
     const vehiclesMap = {};
     
@@ -337,11 +305,14 @@ export const getVehicles = (req, res) => {
       limit: Object.keys(vehiclesMap).length,
       totalPages: 1
     });
-  });
+  } catch (err) {
+    console.error('Query error:', err);
+    res.status(500).json({ error: err.message });
+  }
 };
 
 // Get Available Vehicles
-export const getVehiclesforBooking = (req, res) => {
+export const getVehiclesforBooking = async (req, res) => {
   const sql = `
     SELECT *
     FROM vehicles
@@ -349,22 +320,21 @@ export const getVehiclesforBooking = (req, res) => {
     ORDER BY id DESC
   `;
 
-  db.query(sql, (err, results) => {
-    if (err) {
-      console.error("❌ Error fetching available vehicles:", err);
-      return res.status(500).json({ message: "Server Error" });
-    }
-
+  try {
+    const [results] = await pool.query(sql);
     res.status(200).json({
       success: true,
       count: results.length,
       data: results,
     });
-  });
+  } catch (err) {
+    console.error("❌ Error fetching available vehicles:", err);
+    res.status(500).json({ message: "Server Error" });
+  }
 };
 
 // Get Single Vehicle
-export const getVehicleById = (req, res) => {
+export const getVehicleById = async (req, res) => {
   const { id } = req.params;
 
   const sql = `
@@ -374,8 +344,8 @@ export const getVehicleById = (req, res) => {
     WHERE v.id = ?
   `;
 
-  db.query(sql, [id], (err, rows) => {
-    if (err) return res.status(500).json(err);
+  try {
+    const [rows] = await pool.query(sql, [id]);
 
     if (rows.length === 0) {
       return res.status(404).json({ message: "Not found" });
@@ -396,85 +366,74 @@ export const getVehicleById = (req, res) => {
     });
 
     res.json(vehicle);
-  });
+  } catch (err) {
+    res.status(500).json(err);
+  }
 };
-
 
 // Delete Vehicle (Soft Delete)
-export const deleteVehicle = (req, res) => {
+export const deleteVehicle = async (req, res) => {
   const { id } = req.params;
 
-  // First check if vehicle has any bookings (including cancelled)
-  db.query(
-    "SELECT COUNT(*) as booking_count FROM bookings WHERE vehicle_id = ?",
-    [id],
-    (err, result) => {
-      if (err) {
-        console.error('Error checking bookings:', err);
-        return res.status(500).json({ error: err.message });
-      }
+  try {
+    // First check if vehicle has any bookings (including cancelled)
+    const [result] = await pool.query(
+      "SELECT COUNT(*) as booking_count FROM bookings WHERE vehicle_id = ?",
+      [id]
+    );
 
-      const bookingCount = result[0].booking_count;
+    const bookingCount = result[0].booking_count;
+    
+    if (bookingCount > 0) {
+      // Soft delete - mark as inactive instead of deleting
+      await pool.query(
+        "UPDATE vehicles SET is_active = FALSE, deleted_at = NOW() WHERE id = ?",
+        [id]
+      );
       
-      if (bookingCount > 0) {
-        // Soft delete - mark as inactive instead of deleting
-        db.query(
-          "UPDATE vehicles SET is_active = FALSE, deleted_at = NOW() WHERE id = ?",
-          [id],
-          (updateErr) => {
-            if (updateErr) {
-              console.error('Error soft deleting vehicle:', updateErr);
-              return res.status(500).json({ error: updateErr.message });
-            }
-            
-            // Still delete images from cloudinary
-            db.query(
-              "SELECT public_id FROM vehicle_images WHERE vehicle_id=?",
-              [id],
-              async (imgErr, images) => {
-                if (images && images.length > 0) {
-                  for (let img of images) {
-                    await cloudinary.uploader.destroy(img.public_id);
-                  }
-                }
-                
-                // Optionally delete image records or mark them as inactive too
-                db.query("DELETE FROM vehicle_images WHERE vehicle_id=?", [id], () => {});
-                
-                res.json({ 
-                  message: "Vehicle deactivated successfully. It has existing bookings so it cannot be permanently deleted.",
-                  softDeleted: true 
-                });
-              }
-            );
-          }
-        );
-      } else {
-        // No bookings - can permanently delete
-        db.query(
-          "SELECT public_id FROM vehicle_images WHERE vehicle_id=?",
-          [id],
-          async (imgErr, images) => {
-            if (images && images.length > 0) {
-              for (let img of images) {
-                await cloudinary.uploader.destroy(img.public_id);
-              }
-            }
-
-            db.query("DELETE FROM vehicles WHERE id=?", [id], (deleteErr) => {
-              if (deleteErr) return res.status(500).json(deleteErr);
-              res.json({ message: "Vehicle deleted successfully", permanentDelete: true });
-            });
-          }
-        );
+      // Still delete images from cloudinary
+      const [images] = await pool.query(
+        "SELECT public_id FROM vehicle_images WHERE vehicle_id=?",
+        [id]
+      );
+      
+      if (images && images.length > 0) {
+        for (let img of images) {
+          await cloudinary.uploader.destroy(img.public_id);
+        }
       }
+      
+      // Optionally delete image records or mark them as inactive too
+      await pool.query("DELETE FROM vehicle_images WHERE vehicle_id=?", [id]);
+      
+      res.json({ 
+        message: "Vehicle deactivated successfully. It has existing bookings so it cannot be permanently deleted.",
+        softDeleted: true 
+      });
+    } else {
+      // No bookings - can permanently delete
+      const [images] = await pool.query(
+        "SELECT public_id FROM vehicle_images WHERE vehicle_id=?",
+        [id]
+      );
+      
+      if (images && images.length > 0) {
+        for (let img of images) {
+          await cloudinary.uploader.destroy(img.public_id);
+        }
+      }
+
+      await pool.query("DELETE FROM vehicles WHERE id=?", [id]);
+      res.json({ message: "Vehicle deleted successfully", permanentDelete: true });
     }
-  );
+  } catch (err) {
+    console.error('Error deleting vehicle:', err);
+    res.status(500).json({ error: err.message });
+  }
 };
 
-
 // Create new document for a vehicle (with file upload)
-export const createVehicleDocument = (req, res) => {
+export const createVehicleDocument = async (req, res) => {
   const {
     vehicle_id,
     document_type,
@@ -507,9 +466,8 @@ export const createVehicleDocument = (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
-  db.query(
-    sql,
-    [
+  try {
+    const [result] = await pool.query(sql, [
       vehicle_id,
       document_type,
       document_number || null,
@@ -518,36 +476,28 @@ export const createVehicleDocument = (req, res) => {
       fileUrl,
       publicId,
       notes || null
-    ],
-    (err, result) => {
-      if (err) {
-        console.error('Error creating document:', err);
-        return res.status(500).json({ error: err.message });
-      }
+    ]);
 
-      res.json({
-        success: true,
-        message: "Document uploaded successfully",
-        id: result.insertId,
-        file_url: fileUrl
-      });
-    }
-  );
+    res.json({
+      success: true,
+      message: "Document uploaded successfully",
+      id: result.insertId,
+      file_url: fileUrl
+    });
+  } catch (err) {
+    console.error('Error creating document:', err);
+    res.status(500).json({ error: err.message });
+  }
 };
 
 // Update document (re-upload file)
-export const updateVehicleDocument = (req, res) => {
+export const updateVehicleDocument = async (req, res) => {
   const documentId = req.params.id;
   const { document_number, issue_date, expiry_date, notes } = req.body;
 
-  // Check if document exists
-  const checkSql = "SELECT * FROM vehicle_documents WHERE id = ?";
-  
-  db.query(checkSql, [documentId], (err, results) => {
-    if (err) {
-      console.error('Error checking document:', err);
-      return res.status(500).json({ error: err.message });
-    }
+  try {
+    // Check if document exists
+    const [results] = await pool.query("SELECT * FROM vehicle_documents WHERE id = ?", [documentId]);
 
     if (results.length === 0) {
       return res.status(404).json({ error: "Document not found" });
@@ -597,39 +547,32 @@ export const updateVehicleDocument = (req, res) => {
 
     const sql = `UPDATE vehicle_documents SET ${updateFields.join(", ")} WHERE id = ?`;
 
-    db.query(sql, updateValues, (updateErr) => {
-      if (updateErr) {
-        console.error('Error updating document:', updateErr);
-        return res.status(500).json({ error: updateErr.message });
-      }
+    await pool.query(sql, updateValues);
 
-      // If there was an old file, you might want to delete it from Cloudinary
-      if (req.file && existingDoc.public_id) {
-        // Optional: Delete old file from Cloudinary
-        // cloudinary.uploader.destroy(existingDoc.public_id);
-      }
+    // If there was an old file, you might want to delete it from Cloudinary
+    if (req.file && existingDoc.public_id) {
+      // Optional: Delete old file from Cloudinary
+      // cloudinary.uploader.destroy(existingDoc.public_id);
+    }
 
-      res.json({
-        success: true,
-        message: "Document updated successfully",
-        id: documentId
-      });
+    res.json({
+      success: true,
+      message: "Document updated successfully",
+      id: documentId
     });
-  });
+  } catch (err) {
+    console.error('Error updating document:', err);
+    res.status(500).json({ error: err.message });
+  }
 };
 
 // Delete document
-export const deleteVehicleDocument = (req, res) => {
+export const deleteVehicleDocument = async (req, res) => {
   const documentId = req.params.id;
 
-  // First get the document to get public_id for cloudinary deletion
-  const getSql = "SELECT public_id FROM vehicle_documents WHERE id = ?";
-  
-  db.query(getSql, [documentId], (err, results) => {
-    if (err) {
-      console.error('Error fetching document:', err);
-      return res.status(500).json({ error: err.message });
-    }
+  try {
+    // First get the document to get public_id for cloudinary deletion
+    const [results] = await pool.query("SELECT public_id FROM vehicle_documents WHERE id = ?", [documentId]);
 
     if (results.length === 0) {
       return res.status(404).json({ error: "Document not found" });
@@ -638,30 +581,25 @@ export const deleteVehicleDocument = (req, res) => {
     const publicId = results[0].public_id;
 
     // Delete from database
-    const deleteSql = "DELETE FROM vehicle_documents WHERE id = ?";
-    
-    db.query(deleteSql, [documentId], (deleteErr) => {
-      if (deleteErr) {
-        console.error('Error deleting document:', deleteErr);
-        return res.status(500).json({ error: deleteErr.message });
-      }
+    await pool.query("DELETE FROM vehicle_documents WHERE id = ?", [documentId]);
 
-      // Optional: Delete file from Cloudinary
-      // if (publicId) {
-      //   cloudinary.uploader.destroy(publicId);
-      // }
+    // Optional: Delete file from Cloudinary
+    // if (publicId) {
+    //   cloudinary.uploader.destroy(publicId);
+    // }
 
-      res.json({
-        success: true,
-        message: "Document deleted successfully"
-      });
+    res.json({
+      success: true,
+      message: "Document deleted successfully"
     });
-  });
+  } catch (err) {
+    console.error('Error deleting document:', err);
+    res.status(500).json({ error: err.message });
+  }
 };
 
-
 // Get all documents for a specific vehicle
-export const getVehicleDocuments = (req, res) => {
+export const getVehicleDocuments = async (req, res) => {
   const vehicleId = req.params.id;
 
   const sql = `
@@ -670,16 +608,15 @@ export const getVehicleDocuments = (req, res) => {
     ORDER BY created_at DESC
   `;
 
-  db.query(sql, [vehicleId], (err, results) => {
-    if (err) {
-      console.error('Error fetching documents:', err);
-      return res.status(500).json({ error: err.message });
-    }
-
+  try {
+    const [results] = await pool.query(sql, [vehicleId]);
     res.json({
       success: true,
       data: results,
       count: results.length
     });
-  });
+  } catch (err) {
+    console.error('Error fetching documents:', err);
+    res.status(500).json({ error: err.message });
+  }
 };

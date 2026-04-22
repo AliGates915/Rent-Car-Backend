@@ -1,4 +1,4 @@
-import { db } from "../../config/db.js";
+import { pool } from "../../config/db.js";
 import { addLedgerEntry } from "../../utils/ledger.js";
 
 // Helper function to update vehicle status based on its bookings
@@ -12,7 +12,7 @@ const updateVehicleStatus = (vehicleId, callback) => {
     AND date_to >= CURDATE()
   `;
 
-  db.query(checkActiveBookings, [vehicleId], (err, result) => {
+  pool.query(checkActiveBookings, [vehicleId], (err, result) => {
     if (err) {
       console.error('Error checking active bookings:', err);
       if (callback) callback(err);
@@ -24,7 +24,7 @@ const updateVehicleStatus = (vehicleId, callback) => {
 
     // Update vehicle status
     const updateVehicleSql = `UPDATE vehicles SET status = ? WHERE id = ?`;
-    db.query(updateVehicleSql, [newStatus, vehicleId], (err, updateResult) => {
+    pool.query(updateVehicleSql, [newStatus, vehicleId], (err, updateResult) => {
       if (err) {
         console.error('Error updating vehicle status:', err);
         if (callback) callback(err);
@@ -54,7 +54,7 @@ const checkVehicleAvailability = (vehicleId, dateFrom, dateTo, excludeBookingId 
 
   checkSql += ` ORDER BY date_from ASC`;
 
-  db.query(checkSql, params, (err, conflictingBookings) => {
+  pool.query(checkSql, params, (err, conflictingBookings) => {
     if (err) {
       callback(err);
       return;
@@ -156,7 +156,7 @@ export const createBooking = (req, res) => {
 
     const vehicleSql = `SELECT rate_per_day FROM vehicles WHERE id=?`;
 
-    db.query(vehicleSql, [vehicle_id], (err, vehicle) => {
+    pool.query(vehicleSql, [vehicle_id], (err, vehicle) => {
       if (err) return res.status(500).json(err);
       if (!vehicle.length) {
         return res.status(404).json({ message: "Vehicle not found" });
@@ -197,7 +197,7 @@ export const createBooking = (req, res) => {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
-        db.query(
+        pool.query(
           insertSql,
           [
             booking_code,
@@ -224,7 +224,7 @@ export const createBooking = (req, res) => {
             }
 
             // Update customer balance
-            db.query(
+            pool.query(
               `UPDATE customers 
                SET balance = balance + ? - ? 
                WHERE id = ?`,
@@ -233,7 +233,7 @@ export const createBooking = (req, res) => {
 
             // Insert payment records
             if (advance_paid > 0) {
-              db.query(
+              pool.query(
                 `INSERT INTO booking_payments 
                  (booking_id, payment_type, amount, payment_method, notes)
                  VALUES (?, 'advance', ?, 'cash', 'Advance payment for rental')`,
@@ -242,7 +242,7 @@ export const createBooking = (req, res) => {
             }
 
             if (deposit_collected > 0) {
-              db.query(
+              pool.query(
                 `INSERT INTO booking_payments 
                  (booking_id, payment_type, amount, payment_method, notes)
                  VALUES (?, 'security_deposit', ?, 'cash', 'Security deposit collected')`,
@@ -276,7 +276,7 @@ export const createBooking = (req, res) => {
 
       // If rent_type_id is provided, get the multiplier
       if (rent_type_id) {
-        db.query(`SELECT name FROM rent_types WHERE id = ? AND status = 'active'`, [rent_type_id], (err, rentType) => {
+        pool.query(`SELECT name FROM rent_types WHERE id = ? AND status = 'active'`, [rent_type_id], (err, rentType) => {
           if (err) {
             console.error('Error fetching rent type:', err);
           }
@@ -318,7 +318,7 @@ export const updateBooking = (req, res) => {
   }
 
   // 🔍 get old booking
-  db.query(`SELECT * FROM bookings WHERE id=?`, [id], (err, rows) => {
+  pool.query(`SELECT * FROM bookings WHERE id=?`, [id], (err, rows) => {
     if (err) return res.status(500).json(err);
     if (!rows.length) {
       return res.status(404).json({ message: "Booking not found" });
@@ -386,7 +386,7 @@ export const updateBooking = (req, res) => {
       WHERE b.id = ?
     `;
 
-    db.query(vehicleSql, [id], (err, vehicle) => {
+    pool.query(vehicleSql, [id], (err, vehicle) => {
       if (err) return res.status(500).json(err);
 
       const rate = Number(vehicle[0].rate_per_day);
@@ -398,7 +398,7 @@ export const updateBooking = (req, res) => {
           // If rent type hasn't changed, use the same multiplier logic as before
           let multiplier = 1;
           if (oldBooking.rent_type_id) {
-            db.query(`SELECT name FROM rent_types WHERE id = ?`, [oldBooking.rent_type_id], (err, rentType) => {
+            pool.query(`SELECT name FROM rent_types WHERE id = ?`, [oldBooking.rent_type_id], (err, rentType) => {
               if (!err && rentType && rentType.length > 0) {
                 const typeName = rentType[0].name.toLowerCase();
                 if (typeName.includes('weekly')) multiplier = 0.9;
@@ -411,7 +411,7 @@ export const updateBooking = (req, res) => {
           }
         } else {
           // Fetch new rent type multiplier
-          db.query(`SELECT name FROM rent_types WHERE id = ? AND status = 'active'`, [rentTypeId], (err, rentType) => {
+          pool.query(`SELECT name FROM rent_types WHERE id = ? AND status = 'active'`, [rentTypeId], (err, rentType) => {
             let multiplier = 1;
             if (!err && rentType && rentType.length > 0) {
               const typeName = rentType[0].name.toLowerCase();
@@ -450,7 +450,7 @@ export const updateBooking = (req, res) => {
           const finalStatus = status || oldBooking.status;
           const finalPaymentStatus = payment_status || oldBooking.payment_status;
 
-          db.query(
+          pool.query(
             updateSql,
             [
               cleanDateFrom,
@@ -473,7 +473,7 @@ export const updateBooking = (req, res) => {
               }
 
               if (diff !== 0) {
-                db.query(
+                pool.query(
                   `UPDATE customers SET balance = balance + ? WHERE id=?`,
                   [diff, oldBooking.customer_id],
                   (err3) => {
@@ -512,7 +512,7 @@ export const updateBooking = (req, res) => {
             AND NOT (date_to < ? OR date_from > ?)
           `;
 
-          db.query(
+          pool.query(
             checkSql,
             [vehicle_id, id, cleanDateFrom, cleanDateTo],
             (err, existing) => {
@@ -551,7 +551,7 @@ export const updateBookingStatus = (req, res) => {
   // First get the vehicle_id
   const getVehicleSql = `SELECT vehicle_id FROM bookings WHERE id=?`;
 
-  db.query(getVehicleSql, [id], (err, booking) => {
+  pool.query(getVehicleSql, [id], (err, booking) => {
     if (err) return res.status(500).json(err);
     if (!booking.length) {
       return res.status(404).json({ message: "Booking not found" });
@@ -562,7 +562,7 @@ export const updateBookingStatus = (req, res) => {
     // Update booking status
     const sql = `UPDATE bookings SET status=? WHERE id=?`;
 
-    db.query(sql, [status, id], (err, result) => {
+    pool.query(sql, [status, id], (err, result) => {
       if (err) return res.status(500).json(err);
 
       if (result.affectedRows === 0) {
@@ -592,7 +592,7 @@ export const cancelBooking = (req, res) => {
   // First get the booking details
   const getBookingSql = `SELECT * FROM bookings WHERE id=?`;
 
-  db.query(getBookingSql, [id], (err, booking) => {
+  pool.query(getBookingSql, [id], (err, booking) => {
     if (err) return res.status(500).json(err);
     if (!booking.length) {
       return res.status(404).json({ message: "Booking not found" });
@@ -608,7 +608,7 @@ export const cancelBooking = (req, res) => {
     // Update status to cancelled
     const updateSql = `UPDATE bookings SET status='cancelled' WHERE id=?`;
 
-    db.query(updateSql, [id], (err, result) => {
+    pool.query(updateSql, [id], (err, result) => {
       if (err) return res.status(500).json(err);
 
       // Reverse customer balance
@@ -616,7 +616,7 @@ export const cancelBooking = (req, res) => {
       const paid_amount = oldBooking.paid_amount || 0;
 
       if (paid_amount > 0) {
-        db.query(
+        pool.query(
           `UPDATE customers SET balance = balance - ? WHERE id=?`,
           [paid_amount, oldBooking.customer_id]
         );
@@ -661,7 +661,7 @@ export const getBookingById = (req, res) => {
     WHERE b.id = ?
   `;
 
-  db.query(sql, [id], (err, rows) => {
+  pool.query(sql, [id], (err, rows) => {
     if (err) return res.status(500).json(err);
     if (!rows.length) {
       return res.status(404).json({ message: "Booking not found" });
@@ -713,7 +713,7 @@ export const getBookings = (req, res) => {
   sql += ` ORDER BY b.created_at DESC LIMIT ? OFFSET ?`;
   params.push(parseInt(limit), offset);
 
-  db.query(sql, params, (err, rows) => {
+  pool.query(sql, params, (err, rows) => {
     if (err) return res.status(500).json(err);
 
     // Get total count
@@ -736,7 +736,7 @@ export const getBookings = (req, res) => {
       countParams.push(payment_status);
     }
 
-    db.query(countSql, countParams, (err, countResult) => {
+    pool.query(countSql, countParams, (err, countResult) => {
       if (err) return res.status(500).json(err);
 
       const total = countResult[0]?.total || 0;
@@ -796,7 +796,7 @@ export const getConfirmedBookings = (req, res) => {
 
   sql += ` ORDER BY b.date_from ASC`;
 
-  db.query(sql, queryParams, (err, results) => {
+  pool.query(sql, queryParams, (err, results) => {
     if (err) {
       console.error('Error fetching confirmed bookings:', err);
       return res.status(500).json({ message: 'Database error', error: err });
@@ -846,7 +846,7 @@ export const getAvailableVehicles = (req, res) => {
 
   sql += ` GROUP BY v.id ORDER BY v.car_make, v.car_model`;
 
-  db.query(sql, params, (err, rows) => {
+  pool.query(sql, params, (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
 
     const formatted = rows.map((v) => ({
@@ -877,7 +877,7 @@ export const deleteBooking = (req, res) => {
     WHERE b.id = ?
   `;
 
-  db.query(getBookingSql, [id], (err, bookings) => {
+  pool.query(getBookingSql, [id], (err, bookings) => {
     if (err) {
       console.error('Error fetching booking:', err);
       return res.status(500).json({ error: err.message });
@@ -917,7 +917,7 @@ export const deleteBooking = (req, res) => {
       ORDER BY created_at ASC
     `;
 
-    db.query(getPaymentsSql, [id], (err2, payments) => {
+    pool.query(getPaymentsSql, [id], (err2, payments) => {
       if (err2) {
         console.error('Error fetching payments:', err2);
         return res.status(500).json({ error: err2.message });
@@ -938,7 +938,7 @@ export const deleteBooking = (req, res) => {
         WHERE reference_table = 'bookings' AND reference_id = ?
       `;
 
-      db.query(getLedgerSql, [id], (err3, ledgers) => {
+      pool.query(getLedgerSql, [id], (err3, ledgers) => {
         if (err3) {
           console.error('Error fetching ledgers:', err3);
           return res.status(500).json({ error: err3.message });
@@ -947,7 +947,7 @@ export const deleteBooking = (req, res) => {
         const hasLedgerEntries = ledgers && ledgers.length > 0;
 
         // Start transaction for deletion
-        db.beginTransaction((transactionErr) => {
+        pool.beginTransaction((transactionErr) => {
           if (transactionErr) {
             return res.status(500).json({ error: transactionErr.message });
           }
@@ -958,7 +958,7 @@ export const deleteBooking = (req, res) => {
               // 1. Reverse customer balance
               if (booking.total_amount > 0) {
                 await new Promise((resolve, reject) => {
-                  db.query(
+                  pool.query(
                     `UPDATE customers 
                      SET balance = balance - ? 
                      WHERE id = ?`,
@@ -981,7 +981,7 @@ export const deleteBooking = (req, res) => {
                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
                     `;
 
-                    db.query(reversalSql, [
+                    pool.query(reversalSql, [
                       'deletion_reversal',
                       booking.id,
                       'bookings',
@@ -999,7 +999,7 @@ export const deleteBooking = (req, res) => {
 
                 // Delete original ledger entries
                 await new Promise((resolve, reject) => {
-                  db.query("DELETE FROM ledgers WHERE reference_table = 'bookings' AND reference_id = ?", [id], (err) => {
+                  pool.query("DELETE FROM ledgers WHERE reference_table = 'bookings' AND reference_id = ?", [id], (err) => {
                     if (err) reject(err);
                     else resolve();
                   });
@@ -1017,7 +1017,7 @@ export const deleteBooking = (req, res) => {
                       VALUES (?, 'reversal', ?, ?, ?, NOW())
                     `;
 
-                    db.query(reversalPaymentSql, [
+                    pool.query(reversalPaymentSql, [
                       booking.id,
                       payment.amount,
                       payment.payment_method || 'system',
@@ -1031,7 +1031,7 @@ export const deleteBooking = (req, res) => {
 
                 // Delete original payments
                 await new Promise((resolve, reject) => {
-                  db.query("DELETE FROM booking_payments WHERE booking_id = ?", [id], (err) => {
+                  pool.query("DELETE FROM booking_payments WHERE booking_id = ?", [id], (err) => {
                     if (err) reject(err);
                     else resolve();
                   });
@@ -1045,7 +1045,7 @@ export const deleteBooking = (req, res) => {
                   SET status = 'available' 
                   WHERE id = ?
                 `;
-                db.query(updateVehicleSql, [booking.vehicle_id], (err) => {
+                pool.query(updateVehicleSql, [booking.vehicle_id], (err) => {
                   if (err) reject(err);
                   else resolve();
                 });
@@ -1053,16 +1053,16 @@ export const deleteBooking = (req, res) => {
 
               // 5. Delete the booking
               await new Promise((resolve, reject) => {
-                db.query("DELETE FROM bookings WHERE id = ?", [id], (err) => {
+                pool.query("DELETE FROM bookings WHERE id = ?", [id], (err) => {
                   if (err) reject(err);
                   else resolve();
                 });
               });
 
               // Commit transaction
-              db.commit((commitErr) => {
+              pool.commit((commitErr) => {
                 if (commitErr) {
-                  return db.rollback(() => {
+                  return pool.rollback(() => {
                     res.status(500).json({ error: commitErr.message });
                   });
                 }
@@ -1086,7 +1086,7 @@ export const deleteBooking = (req, res) => {
               });
 
             } catch (error) {
-              db.rollback(() => {
+              pool.rollback(() => {
                 console.error('Transaction error:', error);
                 res.status(500).json({
                   error: "Failed to delete booking",

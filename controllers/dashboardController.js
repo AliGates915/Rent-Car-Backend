@@ -1,17 +1,64 @@
-import { db } from '../config/db.js';
+import { pool } from '../config/db.js';
+
+
+// Helper function to get previous period stats
+const getPreviousPeriodStats = async () => {
+  try {
+    const [customers] = await pool.query(
+      "SELECT COUNT(*) as total FROM customers WHERE status = 'active' AND created_at < DATE_SUB(NOW(), INTERVAL 30 DAY)"
+    );
+    const [vehicles] = await pool.query(
+      "SELECT COUNT(*) as total FROM vehicles WHERE status = 'available' AND created_at < DATE_SUB(NOW(), INTERVAL 30 DAY)"
+    );
+    const [bookings] = await pool.query(
+      "SELECT COUNT(*) as total FROM bookings WHERE DATE(created_at) BETWEEN DATE_SUB(NOW(), INTERVAL 60 DAY) AND DATE_SUB(NOW(), INTERVAL 30 DAY)"
+    );
+    const [revenue] = await pool.query(
+      "SELECT COALESCE(SUM(amount), 0) as total FROM booking_payments WHERE payment_type IN ('advance', 'payment') AND DATE(created_at) BETWEEN DATE_SUB(NOW(), INTERVAL 60 DAY) AND DATE_SUB(NOW(), INTERVAL 30 DAY)"
+    );
+    
+    return {
+      customers: customers[0]?.total || 0,
+      vehicles: vehicles[0]?.total || 0,
+      bookings: bookings[0]?.total || 0,
+      revenue: revenue[0]?.total || 0
+    };
+  } catch (error) {
+    console.error('Error fetching previous period stats:', error);
+    return { customers: 0, vehicles: 0, bookings: 0, revenue: 0 };
+  }
+};
+
+// Helper function to calculate percentage change
+const calculateChange = (current, previous) => {
+  if (previous === 0) return current > 0 ? '+100%' : '0%';
+  const change = ((current - previous) / previous) * 100;
+  return `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`;
+};
 
 // Get dashboard statistics
 export const getDashboardStats = async (req, res) => {
   try {
-    const queries = {
-      // Get total customers
-      customers: `SELECT COUNT(*) as total FROM customers WHERE status = 'active'`,
+    // Execute all queries in parallel using async/await
+    const [
+      [customers],
+      [vehicles],
+      [bookings],
+      [payments],
+      revenue,
+      recentBookings,
+      recentPayments,
+      upcomingBookings,
+      vehicleUtilization,
+      [availableVehicles],
+      [todayRevenue],
+      [monthRevenue]
+    ] = await Promise.all([
+      pool.query("SELECT COUNT(*) as total FROM customers WHERE status = 'active'"),
       
-      // Get total vehicles
-      vehicles: `SELECT COUNT(*) as total FROM vehicles WHERE status = 'available'`,
+      pool.query("SELECT COUNT(*) as total FROM vehicles WHERE status = 'available'"),
       
-      // Get bookings by status
-      bookings: `
+      pool.query(`
         SELECT 
           COUNT(*) as total,
           SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
@@ -21,10 +68,9 @@ export const getDashboardStats = async (req, res) => {
           SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
         FROM bookings 
         WHERE DATE(created_at) >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-      `,
+      `),
       
-      // Get payment statistics
-      payments: `
+      pool.query(`
         SELECT 
           COUNT(*) as total_transactions,
           COALESCE(SUM(amount), 0) as total_amount,
@@ -33,10 +79,9 @@ export const getDashboardStats = async (req, res) => {
           COALESCE(SUM(CASE WHEN payment_type = 'security_deposit' THEN amount ELSE 0 END), 0) as total_deposits
         FROM booking_payments 
         WHERE DATE(created_at) >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-      `,
+      `),
       
-      // Get revenue by period (last 30 days)
-      revenue: `
+      pool.query(`
         SELECT 
           DATE(created_at) as date,
           COALESCE(SUM(CASE WHEN payment_type IN ('advance', 'payment') THEN amount ELSE 0 END), 0) as daily_revenue
@@ -44,10 +89,9 @@ export const getDashboardStats = async (req, res) => {
         WHERE DATE(created_at) >= DATE_SUB(NOW(), INTERVAL 30 DAY)
         GROUP BY DATE(created_at)
         ORDER BY date ASC
-      `,
+      `),
       
-      // Get recent bookings
-      recentBookings: `
+      pool.query(`
         SELECT 
           b.id,
           b.booking_code,
@@ -65,10 +109,9 @@ export const getDashboardStats = async (req, res) => {
         JOIN vehicles v ON b.vehicle_id = v.id
         ORDER BY b.created_at DESC
         LIMIT 10
-      `,
+      `),
       
-      // Get recent payments
-      recentPayments: `
+      pool.query(`
         SELECT 
           bp.id,
           bp.payment_type,
@@ -82,10 +125,9 @@ export const getDashboardStats = async (req, res) => {
         JOIN customers c ON b.customer_id = c.id
         ORDER BY bp.created_at DESC
         LIMIT 10
-      `,
+      `),
       
-      // Get upcoming bookings (next 7 days)
-      upcomingBookings: `
+      pool.query(`
         SELECT 
           b.id,
           b.booking_code,
@@ -102,10 +144,9 @@ export const getDashboardStats = async (req, res) => {
         AND b.status NOT IN ('completed', 'cancelled')
         ORDER BY b.date_from ASC
         LIMIT 10
-      `,
+      `),
       
-      // Get vehicle utilization
-      vehicleUtilization: `
+      pool.query(`
         SELECT 
           v.id,
           CONCAT(v.car_make, ' ', v.car_model) as vehicle_name,
@@ -123,87 +164,59 @@ export const getDashboardStats = async (req, res) => {
         GROUP BY v.id
         ORDER BY total_bookings DESC
         LIMIT 5
-      `,
+      `),
       
-      // Get total available vehicles
-      availableVehicles: `
-        SELECT COUNT(*) as total 
-        FROM vehicles 
-        WHERE status = 'available' AND is_active = 1
-      `,
+      pool.query("SELECT COUNT(*) as total FROM vehicles WHERE status = 'available' AND is_active = 1"),
       
-      // Get today's revenue
-      todayRevenue: `
+      pool.query(`
         SELECT COALESCE(SUM(amount), 0) as total
         FROM booking_payments 
         WHERE payment_type IN ('advance', 'payment')
         AND DATE(created_at) = CURDATE()
-      `,
+      `),
       
-      // Get this month's revenue
-      monthRevenue: `
+      pool.query(`
         SELECT COALESCE(SUM(amount), 0) as total
         FROM booking_payments 
         WHERE payment_type IN ('advance', 'payment')
         AND MONTH(created_at) = MONTH(CURDATE())
         AND YEAR(created_at) = YEAR(CURDATE())
-      `
-    };
+      `)
+    ]);
 
-    // Execute all queries in parallel
-    const results = await Promise.all(
-      Object.values(queries).map(query => 
-        new Promise((resolve, reject) => {
-          db.query(query, (err, result) => {
-            if (err) reject(err);
-            else resolve(result);
-          });
-        })
-      )
-    );
-
-    const [
-      customers,
-      vehicles,
-      bookings,
-      payments,
-      revenue,
-      recentBookings,
-      recentPayments,
-      upcomingBookings,
-      vehicleUtilization,
-      availableVehicles,
-      todayRevenue,
-      monthRevenue
-    ] = results;
-
-    // Calculate change percentages (comparing with previous period)
+    // Get previous period stats for comparison
     const previousPeriodStats = await getPreviousPeriodStats();
-    
+
+    // Transform revenue data
+    const revenueData = revenue.map(row => ({
+      date: row.date,
+      revenue: Number(row.daily_revenue)
+    }));
+
     const dashboardData = {
       summaryCards: [
         {
           label: 'Total Customers',
-          value: customers[0]?.total || 0,
-          change: calculateChange(customers[0]?.total || 0, previousPeriodStats.customers),
+          value: customers?.total || 0,
+          change: calculateChange(customers?.total || 0, previousPeriodStats.customers),
           icon: 'Users'
         },
         {
           label: 'Active Vehicles',
-          value: vehicles[0]?.total || 0,
-          change: calculateChange(vehicles[0]?.total || 0, previousPeriodStats.vehicles),
+          value: vehicles?.total || 0,
+          change: calculateChange(vehicles?.total || 0, previousPeriodStats.vehicles),
           icon: 'CarFront'
         },
         {
           label: 'Total Bookings (30d)',
-          value: bookings[0]?.total || 0,
-          change: calculateChange(bookings[0]?.total || 0, previousPeriodStats.bookings),
+          value: bookings?.total || 0,
+          change: calculateChange(bookings?.total || 0, previousPeriodStats.bookings),
           icon: 'ClipboardList'
         },
         {
           label: 'Total Revenue (30d)',
-          value: payments[0]?.total_amount || 0,
-          change: calculateChange(payments[0]?.total_amount || 0, previousPeriodStats.revenue),
+          value: Number(payments?.total_amount || 0),
+          change: calculateChange(payments?.total_amount || 0, previousPeriodStats.revenue),
           icon: 'CreditCard',
           isCurrency: true
         }
@@ -211,48 +224,45 @@ export const getDashboardStats = async (req, res) => {
       quickStats: [
         { 
           label: 'Active Customers', 
-          value: customers[0]?.total || 0, 
+          value: customers?.total || 0, 
           icon: 'Users',
           trend: '+12%'
         },
         { 
           label: 'Available Vehicles', 
-          value: availableVehicles[0]?.total || 0, 
+          value: availableVehicles?.total || 0, 
           icon: 'CarFront',
           trend: '-5%'
         },
         { 
           label: 'Active Bookings', 
-          value: bookings[0]?.ongoing || 0, 
+          value: bookings?.ongoing || 0, 
           icon: 'ClipboardList',
           trend: '+8%'
         },
         { 
           label: 'Today\'s Revenue', 
-          value: todayRevenue[0]?.total || 0, 
+          value: Number(todayRevenue?.total || 0), 
           icon: 'CreditCard',
           trend: '+23%',
           isCurrency: true
         }
       ],
       bookingsBreakdown: {
-        pending: bookings[0]?.pending || 0,
-        confirmed: bookings[0]?.confirmed || 0,
-        ongoing: bookings[0]?.ongoing || 0,
-        completed: bookings[0]?.completed || 0,
-        cancelled: bookings[0]?.cancelled || 0
+        pending: bookings?.pending || 0,
+        confirmed: bookings?.confirmed || 0,
+        ongoing: bookings?.ongoing || 0,
+        completed: bookings?.completed || 0,
+        cancelled: bookings?.cancelled || 0
       },
       paymentStats: {
-        totalTransactions: payments[0]?.total_transactions || 0,
-        totalAdvances: payments[0]?.total_advances || 0,
-        totalPayments: payments[0]?.total_payments || 0,
-        totalDeposits: payments[0]?.total_deposits || 0,
-        monthRevenue: monthRevenue[0]?.total || 0
+        totalTransactions: payments?.total_transactions || 0,
+        totalAdvances: Number(payments?.total_advances || 0),
+        totalPayments: Number(payments?.total_payments || 0),
+        totalDeposits: Number(payments?.total_deposits || 0),
+        monthRevenue: Number(monthRevenue?.total || 0)
       },
-      revenueData: revenue.map(row => ({
-        date: row.date,
-        revenue: row.daily_revenue
-      })),
+      revenueData: revenueData,
       recentBookings: recentBookings.map(booking => ({
         id: booking.id,
         code: booking.booking_code,
@@ -260,8 +270,8 @@ export const getDashboardStats = async (req, res) => {
         vehicle: `${booking.vehicle_name} (${booking.registration_no})`,
         dateFrom: booking.date_from,
         dateTo: booking.date_to,
-        amount: booking.total_amount,
-        paid: booking.paid_amount,
+        amount: Number(booking.total_amount),
+        paid: Number(booking.paid_amount),
         status: booking.status,
         paymentStatus: booking.payment_status
       })),
@@ -270,7 +280,7 @@ export const getDashboardStats = async (req, res) => {
         bookingCode: payment.booking_code,
         customer: payment.customer_name,
         type: payment.payment_type,
-        amount: payment.amount,
+        amount: Number(payment.amount),
         method: payment.payment_method,
         date: payment.created_at
       })),
@@ -281,7 +291,7 @@ export const getDashboardStats = async (req, res) => {
         vehicle: `${booking.vehicle_name} (${booking.registration_no})`,
         dateFrom: booking.date_from,
         dateTo: booking.date_to,
-        amount: booking.total_amount
+        amount: Number(booking.total_amount)
       })),
       vehicleUtilization: vehicleUtilization.map(vehicle => ({
         id: vehicle.id,
@@ -309,44 +319,6 @@ export const getDashboardStats = async (req, res) => {
   }
 };
 
-// Helper function to get previous period statistics
-const getPreviousPeriodStats = async () => {
-  return new Promise((resolve, reject) => {
-    const queries = {
-      customers: `SELECT COUNT(*) as total FROM customers WHERE status = 'active' AND DATE(created_at) < DATE_SUB(NOW(), INTERVAL 30 DAY)`,
-      vehicles: `SELECT COUNT(*) as total FROM vehicles WHERE status = 'available' AND DATE(created_at) < DATE_SUB(NOW(), INTERVAL 30 DAY)`,
-      bookings: `SELECT COUNT(*) as total FROM bookings WHERE DATE(created_at) < DATE_SUB(NOW(), INTERVAL 30 DAY)`,
-      revenue: `SELECT COALESCE(SUM(amount), 0) as total FROM booking_payments WHERE payment_type IN ('advance', 'payment') AND DATE(created_at) < DATE_SUB(NOW(), INTERVAL 30 DAY)`
-    };
-
-    Promise.all(
-      Object.values(queries).map(query => 
-        new Promise((resolveQuery, rejectQuery) => {
-          db.query(query, (err, result) => {
-            if (err) rejectQuery(err);
-            else resolveQuery(result[0]?.total || 0);
-          });
-        })
-      )
-    ).then(results => {
-      resolve({
-        customers: results[0],
-        vehicles: results[1],
-        bookings: results[2],
-        revenue: results[3]
-      });
-    }).catch(reject);
-  });
-};
-
-// Helper function to calculate percentage change
-const calculateChange = (current, previous) => {
-  if (previous === 0) return '+100%';
-  const change = ((current - previous) / previous) * 100;
-  const sign = change >= 0 ? '+' : '';
-  return `${sign}${change.toFixed(1)}%`;
-};
-
 // Get revenue chart data
 export const getRevenueChart = async (req, res) => {
   const { period = '30' } = req.query;
@@ -363,18 +335,25 @@ export const getRevenueChart = async (req, res) => {
       ORDER BY date ASC
     `;
     
-    db.query(query, [period], (err, results) => {
-      if (err) {
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      
-      res.json({
-        success: true,
-        data: results
-      });
+    const [results] = await pool.query(query, [period]);
+    
+    // Format results to ensure numeric values
+    const formattedResults = results.map(row => ({
+      date: row.date,
+      revenue: Number(row.revenue),
+      deposits: Number(row.deposits)
+    }));
+    
+    res.json({
+      success: true,
+      data: formattedResults
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Revenue chart error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   }
 };
 
@@ -419,24 +398,25 @@ export const getTimelineEvents = async (req, res) => {
       LIMIT ?
     `;
     
-    db.query(query, [limit, limit, limit, limit], (err, results) => {
-      if (err) {
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      
-      // Format the results
-      const formattedResults = results.map(result => ({
-        ...result,
-        details: typeof result.details === 'string' ? JSON.parse(result.details) : result.details
-      }));
-      
-      res.json({
-        success: true,
-        data: formattedResults
-      });
+    const [results] = await pool.query(query, [limit, limit, limit, limit]);
+    
+    // Format the results and parse JSON details
+    const formattedResults = results.map(result => ({
+      ...result,
+      event_date: result.event_date,
+      details: typeof result.details === 'string' ? JSON.parse(result.details) : result.details
+    }));
+    
+    res.json({
+      success: true,
+      data: formattedResults
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Timeline events error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   }
 };
 
@@ -447,23 +427,30 @@ export const getBookingStats = async (req, res) => {
       SELECT 
         status,
         COUNT(*) as count,
-        SUM(total_amount) as total_value
+        COALESCE(SUM(total_amount), 0) as total_value
       FROM bookings
       GROUP BY status
     `;
     
-    db.query(query, (err, results) => {
-      if (err) {
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      
-      res.json({
-        success: true,
-        data: results
-      });
+    const [results] = await pool.query(query);
+    
+    // Format results with proper numeric values
+    const formattedResults = results.map(row => ({
+      status: row.status,
+      count: Number(row.count),
+      total_value: Number(row.total_value)
+    }));
+    
+    res.json({
+      success: true,
+      data: formattedResults
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Booking stats error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   }
 };
 
@@ -478,17 +465,23 @@ export const getVehicleStats = async (req, res) => {
       GROUP BY status
     `;
     
-    db.query(query, (err, results) => {
-      if (err) {
-        return res.status(500).json({ success: false, error: err.message });
-      }
-      
-      res.json({
-        success: true,
-        data: results
-      });
+    const [results] = await pool.query(query);
+    
+    // Format results
+    const formattedResults = results.map(row => ({
+      status: row.status,
+      count: Number(row.count)
+    }));
+    
+    res.json({
+      success: true,
+      data: formattedResults
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Vehicle stats error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   }
 };

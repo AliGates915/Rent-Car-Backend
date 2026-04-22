@@ -2,6 +2,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
+import { db } from "./config/db.js";
 import authRoutes from "./routes/auth.routes.js";
 import vehicleRoutes from "./routes/vehicle.routes.js";
 // IMPORTANT: Remove these individual routes since they'll be handled by the generic setup routes
@@ -25,6 +26,8 @@ import { userRoutes } from "./routes/user.routes.js";
 import dashboardRoutes from './routes/dashboardRoutes.js';
 
 dotenv.config();
+
+await db(); // 🔥 THIS IS REQUIRED
 
 const app = express();
 
