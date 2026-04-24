@@ -39,25 +39,23 @@ const calculateChange = (current, previous) => {
 // Get dashboard statistics
 export const getDashboardStats = async (req, res) => {
   try {
-    // Execute all queries in parallel using async/await
+    // Execute all queries in parallel - FIXED destructuring
     const [
-      [customers],
-      [vehicles],
-      [bookings],
-      [payments],
-      revenue,
-      recentBookings,
-      recentPayments,
-      upcomingBookings,
-      vehicleUtilization,
-      [availableVehicles],
-      [todayRevenue],
-      [monthRevenue]
+      customersResult,
+      vehiclesResult,
+      bookingsResult,
+      paymentsResult,
+      revenueResult,
+      recentBookingsResult,
+      recentPaymentsResult,
+      upcomingBookingsResult,
+      vehicleUtilizationResult,
+      availableVehiclesResult,
+      todayRevenueResult,
+      monthRevenueResult
     ] = await Promise.all([
       pool.query("SELECT COUNT(*) as total FROM customers WHERE status = 'active'"),
-      
       pool.query("SELECT COUNT(*) as total FROM vehicles WHERE status = 'available'"),
-      
       pool.query(`
         SELECT 
           COUNT(*) as total,
@@ -69,7 +67,6 @@ export const getDashboardStats = async (req, res) => {
         FROM bookings 
         WHERE DATE(created_at) >= DATE_SUB(NOW(), INTERVAL 30 DAY)
       `),
-      
       pool.query(`
         SELECT 
           COUNT(*) as total_transactions,
@@ -80,7 +77,6 @@ export const getDashboardStats = async (req, res) => {
         FROM booking_payments 
         WHERE DATE(created_at) >= DATE_SUB(NOW(), INTERVAL 30 DAY)
       `),
-      
       pool.query(`
         SELECT 
           DATE(created_at) as date,
@@ -90,7 +86,6 @@ export const getDashboardStats = async (req, res) => {
         GROUP BY DATE(created_at)
         ORDER BY date ASC
       `),
-      
       pool.query(`
         SELECT 
           b.id,
@@ -110,7 +105,6 @@ export const getDashboardStats = async (req, res) => {
         ORDER BY b.created_at DESC
         LIMIT 10
       `),
-      
       pool.query(`
         SELECT 
           bp.id,
@@ -126,7 +120,6 @@ export const getDashboardStats = async (req, res) => {
         ORDER BY bp.created_at DESC
         LIMIT 10
       `),
-      
       pool.query(`
         SELECT 
           b.id,
@@ -145,7 +138,6 @@ export const getDashboardStats = async (req, res) => {
         ORDER BY b.date_from ASC
         LIMIT 10
       `),
-      
       pool.query(`
         SELECT 
           v.id,
@@ -165,16 +157,13 @@ export const getDashboardStats = async (req, res) => {
         ORDER BY total_bookings DESC
         LIMIT 5
       `),
-      
       pool.query("SELECT COUNT(*) as total FROM vehicles WHERE status = 'available' AND is_active = 1"),
-      
       pool.query(`
         SELECT COALESCE(SUM(amount), 0) as total
         FROM booking_payments 
         WHERE payment_type IN ('advance', 'payment')
         AND DATE(created_at) = CURDATE()
       `),
-      
       pool.query(`
         SELECT COALESCE(SUM(amount), 0) as total
         FROM booking_payments 
@@ -183,6 +172,20 @@ export const getDashboardStats = async (req, res) => {
         AND YEAR(created_at) = YEAR(CURDATE())
       `)
     ]);
+
+    // Extract the actual data from the result arrays
+    const customers = customersResult[0][0] || { total: 0 };
+    const vehicles = vehiclesResult[0][0] || { total: 0 };
+    const bookings = bookingsResult[0][0] || { total: 0, pending: 0, confirmed: 0, ongoing: 0, completed: 0, cancelled: 0 };
+    const payments = paymentsResult[0][0] || { total_transactions: 0, total_amount: 0, total_advances: 0, total_payments: 0, total_deposits: 0 };
+    const revenue = revenueResult[0] || [];
+    const recentBookings = recentBookingsResult[0] || [];
+    const recentPayments = recentPaymentsResult[0] || [];
+    const upcomingBookings = upcomingBookingsResult[0] || [];
+    const vehicleUtilization = vehicleUtilizationResult[0] || [];
+    const availableVehicles = availableVehiclesResult[0][0] || { total: 0 };
+    const todayRevenue = todayRevenueResult[0][0] || { total: 0 };
+    const monthRevenue = monthRevenueResult[0][0] || { total: 0 };
 
     // Get previous period stats for comparison
     const previousPeriodStats = await getPreviousPeriodStats();
