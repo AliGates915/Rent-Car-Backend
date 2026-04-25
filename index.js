@@ -22,7 +22,7 @@ import ownerRoutes from "./routes/owner/owner.routes.js";
 import dayBook from "./routes/daybook/daybook.routes.js";
 import { userRoutes } from "./routes/user.routes.js";
 // TEMPORARILY COMMENTED OUT - Fix missing file
-// import dashboardRoutes from './routes/dashboardRoutes.js';
+import dashboardRoutes from './routes/dashboard.routes.js';
 
 dotenv.config();
 
@@ -69,7 +69,7 @@ app.use("/api/owner-earnings", ownerEarningRoutes);
 app.use("/api/owners", ownerRoutes);
 app.use("/api/daybook", dayBook);
 // TEMPORARILY COMMENTED OUT
-// app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // 404 handler for unknown routes
 app.use('*', (req, res) => {
