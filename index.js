@@ -1,4 +1,3 @@
-// backend/server.js or app.js
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
@@ -22,23 +21,38 @@ import ownerEarningRoutes from "./routes/owner/ownerEarning.routes.js";
 import ownerRoutes from "./routes/owner/owner.routes.js";
 import dayBook from "./routes/daybook/daybook.routes.js";
 import { userRoutes } from "./routes/user.routes.js";
-import dashboardRoutes from './routes/dashboardRoutes.js';
+// TEMPORARILY COMMENTED OUT - Fix missing file
+// import dashboardRoutes from './routes/dashboardRoutes.js';
 
 dotenv.config();
 
-await db(); // 🔥 THIS IS REQUIRED
+await db();
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
+// Root route handler
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Rent Car Backend API',
+    status: 'online',
+    version: '1.0.0',
+    endpoints: '/api/{auth,users,customers,vehicles,bookings,payments,reports}'
+  });
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK', timestamp: new Date() });
+});
+
 // Other routes
 app.use("/api/users", userRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/vehicles", vehicleRoutes);
-
 app.use("/api/vehicle-types", vehicleTypeRoutes);
 app.use("/api/maintenance-types", maintenanceTypeRoutes);
 app.use("/api/rent-types", rentTypeRoutes);
@@ -54,8 +68,17 @@ app.use('/api/maintenance', maintenanceRoutes);
 app.use("/api/owner-earnings", ownerEarningRoutes);
 app.use("/api/owners", ownerRoutes);
 app.use("/api/daybook", dayBook);
-app.use('/api/dashboard', dashboardRoutes);
+// TEMPORARILY COMMENTED OUT
+// app.use('/api/dashboard', dashboardRoutes);
 
+// 404 handler for unknown routes
+app.use('*', (req, res) => {
+  res.status(404).json({ 
+    error: 'Route not found',
+    path: req.originalUrl,
+    method: req.method
+  });
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
