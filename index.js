@@ -21,8 +21,9 @@ import ownerEarningRoutes from "./routes/owner/ownerEarning.routes.js";
 import ownerRoutes from "./routes/owner/owner.routes.js";
 import dayBook from "./routes/daybook/daybook.routes.js";
 import { userRoutes } from "./routes/user.routes.js";
+
 // TEMPORARILY COMMENTED OUT - Fix missing file
-import dashboardRoutes from './routes/dashboard.routes.js';
+// import dashboardRoutes from './routes/dashboardRoutes.js';
 
 dotenv.config();
 
@@ -68,11 +69,12 @@ app.use('/api/maintenance', maintenanceRoutes);
 app.use("/api/owner-earnings", ownerEarningRoutes);
 app.use("/api/owners", ownerRoutes);
 app.use("/api/daybook", dayBook);
-// TEMPORARILY COMMENTED OUT
-app.use('/api/dashboard', dashboardRoutes);
 
-// 404 handler for unknown routes
-app.use('*', (req, res) => {
+// TEMPORARILY COMMENTED OUT - dashboard routes
+// app.use('/api/dashboard', dashboardRoutes);
+
+// ✅ CORRECT 404 handler - NO '*' parameter
+app.use((req, res) => {
   res.status(404).json({ 
     error: 'Route not found',
     path: req.originalUrl,
