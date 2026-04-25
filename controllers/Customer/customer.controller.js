@@ -188,8 +188,6 @@ export const deleteCustomer = async (req, res) => {
   }
 };
 
-// controllers/Customer/customer.controller.js
-
 export const uploadCustomerDocument = async (req, res) => {
   try {
     const { customer_id } = req.params;

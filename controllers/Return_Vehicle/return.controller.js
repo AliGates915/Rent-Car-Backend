@@ -6,14 +6,14 @@ import { addLedgerEntry } from "../../utils/ledger.js";
 // GET all returns with pagination and filters
 export const getReturns = async (req, res) => {
   try {
-    const { 
-      page = 1, 
-      limit = 10, 
-      search, 
-      booking_id, 
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      booking_id,
       status = 'completed'
     } = req.query;
-    
+
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     let sql = `
@@ -182,178 +182,296 @@ export const getReturns = async (req, res) => {
   }
 };
 
-// Helper function to get total paid amount
+// Helper function to get total paid amount (optimized)
 const getTotalPaid = async (booking_id) => {
   const [result] = await pool.query(
-    `SELECT SUM(amount) as total_paid 
+    `SELECT COALESCE(SUM(amount), 0) as total_paid 
      FROM booking_payments 
-     WHERE booking_id = ? AND payment_type IN ('advance', 'payment')`,
+     WHERE booking_id = ? AND payment_type IN ('advance', 'payment', 'security_deposit')`,
     [booking_id]
   );
-  return result[0]?.total_paid || 0;
+  return parseFloat(result[0]?.total_paid || 0);
 };
 
-// Helper function to get security deposit
-const getSecurityDeposit = async (booking_id) => {
-  const [result] = await pool.query(
-    `SELECT SUM(amount) as deposit 
-     FROM booking_payments 
-     WHERE booking_id = ? AND payment_type = 'security_deposit'`,
+// Helper function to get booking with all details (optimized)
+const getBookingDetails = async (connection, booking_id) => {
+  const [bookingResult] = await connection.query(
+    `SELECT 
+      b.*, 
+      v.owner_id, 
+      v.owner_percentage, 
+      v.rate_per_day,
+      v.registration_no,
+      v.car_make,
+      v.car_model,
+      c.customer_name,
+      c.phone_no,
+      c.cnic_no
+     FROM bookings b 
+     JOIN vehicles v ON b.vehicle_id = v.id 
+     JOIN customers c ON b.customer_id = c.id
+     WHERE b.id = ? AND b.status = 'ongoing'`,
     [booking_id]
   );
-  return result[0]?.deposit || 0;
+
+  if (bookingResult.length === 0) return null;
+
+  const booking = bookingResult[0];
+
+  // Get total paid amount from payments table
+  const totalPaid = await getTotalPaid(booking_id);
+
+  return {
+    ...booking,
+    total_paid: totalPaid,
+    total_amount: parseFloat(booking.total_amount || 0),
+    advance_amount: parseFloat(booking.advance_amount || 0),
+    security_deposit: parseFloat(booking.security_deposit || 0),
+    rate_per_day: parseFloat(booking.rate_per_day || 0)
+  };
 };
 
-// CREATE return
+
+const calculateLateCharges = (returnDate, endDate, dailyRate) => {
+  // Parse dates - don't let timezone conversion affect the date
+  const returnDateObj = new Date(returnDate);
+  const endDateObj = new Date(endDate);
+
+  // Get date parts in local timezone
+  const returnLocalDate = new Date(
+    returnDateObj.getFullYear(),
+    returnDateObj.getMonth(),
+    returnDateObj.getDate()
+  );
+
+  const endLocalDate = new Date(
+    endDateObj.getFullYear(),
+    endDateObj.getMonth(),
+    endDateObj.getDate()
+  );
+
+  console.log('Calculating late charges:', {
+    returnDateRaw: returnDate,
+    endDateRaw: endDate,
+    returnLocalDate,
+    endLocalDate,
+    dailyRate
+  });
+
+  if (returnLocalDate <= endLocalDate) {
+    console.log('No late return');
+    return { late_days: 0, late_charges: 0 };
+  }
+
+  const diffTime = returnLocalDate - endLocalDate;
+  const late_days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const late_charges = late_days * dailyRate * 1.5;
+
+  console.log(`Late return: ${late_days} days, charges: ${late_charges}`);
+
+  return { late_days, late_charges };
+};
+
+
+// CREATE return (optimized with fixed ledger handling)
 export const returnVehicle = async (req, res) => {
   const connection = await pool.getConnection();
-  
+
   try {
+    // Set transaction timeout
+    await connection.query('SET SESSION innodb_lock_wait_timeout = 50');
     await connection.beginTransaction();
 
-    const { 
-      booking_id, 
+    const {
+      booking_id,
       return_date,
-      odometer_in,
-      fuel_level_in,
-      extra_charges = 0, 
-      damage_charges = 0, 
-      damage_notes,
+      extra_charges = 0,
+      damage_charges = 0,
       notes,
-      returned_by
+      returned_by,
+      // These come from frontend calculations
+      final_amount,
+      balance_amount,
+      paid_amount,
+      late_days,
+      total_days
     } = req.body;
 
-    // Get booking details
-    const [bookingResult] = await connection.query(
-      `SELECT b.*, v.owner_id, v.owner_percentage, v.rate_per_day
-       FROM bookings b 
-       JOIN vehicles v ON b.vehicle_id = v.id 
-       WHERE b.id = ? AND b.status = 'ongoing'`,
-      [booking_id]
-    );
-
-    if (bookingResult.length === 0) {
+    // Validate required fields
+    if (!booking_id || !return_date) {
       await connection.rollback();
-      return res.status(404).json({ message: "Ongoing booking not found" });
+      return res.status(400).json({
+        success: false,
+        message: "Booking ID and return date are required"
+      });
     }
 
-    const booking = bookingResult[0];
-    
-    // Get total paid and security deposit
-    const total_paid = await getTotalPaid(booking_id);
-    const security_deposit = await getSecurityDeposit(booking_id);
-    
-    // Calculate late days
-    let late_days = 0;
-    let late_charges = 0;
-    const returnDate = new Date(return_date);
-    const endDate = new Date(booking.date_to);
-    
-    returnDate.setHours(0, 0, 0, 0);
-    endDate.setHours(0, 0, 0, 0);
-    
-    if (returnDate > endDate) {
-      const diffTime = returnDate - endDate;
-      late_days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      const dailyRate = Number(booking.rate_per_day || 0);
-      late_charges = late_days * dailyRate * 1.5; // 50% extra for late return
+    // Get booking details with payments
+    const booking = await getBookingDetails(connection, booking_id);
+
+    if (!booking) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Ongoing booking not found"
+      });
     }
-    
-    // Calculate final amounts
-    const base_amount = Number(booking.total_amount || 0);
-    const final_amount = base_amount + Number(extra_charges) + Number(damage_charges) + late_charges;
-    const balance_amount = final_amount - total_paid;
-    const deposit_refund = security_deposit - (Number(damage_charges) + Number(extra_charges));
-    
-    // Insert return record
+
+    // Calculate late charges if not provided from frontend
+    let calculatedLateDays = late_days || 0;
+    let calculatedLateCharges = 0;
+
+    if (!late_days) {
+      const { late_days: ld, late_charges: lc } = calculateLateCharges(
+        return_date,
+        booking.date_to,
+        booking.rate_per_day
+      );
+      calculatedLateDays = ld;
+      calculatedLateCharges = lc;
+    } else {
+      calculatedLateCharges = calculatedLateDays * booking.rate_per_day * 1.5;
+    }
+
+    // Calculate final amounts (use provided values or calculate)
+    const base_amount = booking.total_amount;
+    const total_extra_charges = Number(extra_charges) + Number(damage_charges);
+    const finalAmount = final_amount || (base_amount + total_extra_charges + calculatedLateCharges);
+    const balanceAmount = balance_amount !== undefined ? balance_amount : (finalAmount - (paid_amount || booking.total_paid));
+    const totalPaid = paid_amount || booking.total_paid;
+
+    console.log("Final Amount:", finalAmount);
+    console.log("Balance Amount:", balanceAmount);
+    console.log("Total Paid:", totalPaid);
+    console.log("Late Days:", calculatedLateDays);
+
+    // Calculate deposit refund
+    const net_damage_charges = Number(damage_charges) + Number(extra_charges);
+    const deposit_refund = Math.max(0, booking.security_deposit - net_damage_charges);
+
+    // Insert return record with ALL fields including odometer and fuel
+    // Insert return record - REMOVED the trailing comma after returned_by
     const [insertResult] = await connection.query(
-      `INSERT INTO vehicle_return
-       (booking_id, vehicle_id, return_date, total_days, late_days, 
-        extra_charges, damage_charges, final_amount, paid_amount, 
-        balance_amount, notes, returned_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO vehicle_return (
+    booking_id, vehicle_id, return_date, total_days, late_days, 
+    extra_charges, damage_charges, final_amount, paid_amount, 
+    balance_amount, notes, returned_by
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         booking.id,
         booking.vehicle_id,
         return_date,
-        booking.total_days,
-        late_days,
+        total_days || booking.total_days,
+        calculatedLateDays,
         extra_charges,
         damage_charges,
-        final_amount,
-        total_paid,
-        balance_amount,
+        finalAmount,
+        totalPaid,
+        balanceAmount,
         notes || null,
         returned_by || null
       ]
     );
 
-    // Update booking status to completed
+    console.log("Return record inserted with ID:", insertResult.insertId);
+
+    // Update booking status
+    const newPaymentStatus = balanceAmount <= 0 ? 'paid' : (balanceAmount > 0 ? 'partial' : 'overpaid');
     await connection.query(
-      `UPDATE bookings SET status='completed', payment_status=?, updated_at=NOW() WHERE id=?`,
-      [balance_amount <= 0 ? 'paid' : 'partial', booking_id]
+      `UPDATE bookings 
+       SET status = 'completed', 
+           payment_status = ?,
+           updated_at = NOW() 
+       WHERE id = ?`,
+      [newPaymentStatus, booking_id]
     );
-    
-    // Update vehicle status to available
+
+    // Update vehicle status
     await connection.query(
-      `UPDATE vehicles SET status='available' WHERE id=?`,
+      `UPDATE vehicles SET status = 'available' WHERE id = ?`,
       [booking.vehicle_id]
     );
 
-    // Update customer balance
-    await connection.query(
-      `UPDATE customers SET balance = balance + ? WHERE id=?`,
-      [balance_amount, booking.customer_id]
-    );
+    // Update customer balance (if balance is due, customer owes money; if negative, customer gets refund)
+    if (balanceAmount !== 0) {
+      await connection.query(
+        `UPDATE customers SET balance = balance + ? WHERE id = ?`,
+        [balanceAmount, booking.customer_id]
+      );
+    }
 
-    // Add ledger entry for the return
-    await addLedgerEntry({
-      entry_type: "return",
-      reference_id: insertResult.insertId,
-      reference_table: "vehicle_return",
-      vehicle_id: booking.vehicle_id,
-      customer_id: booking.customer_id,
-      amount: balance_amount,
-      description: `Vehicle returned - Booking ${booking.booking_code} | Balance due: ${balance_amount}`
-    });
-
-    // If there's a deposit refund, create a negative payment record
+    // Handle deposit refund if applicable
     if (deposit_refund > 0) {
       await connection.query(
         `INSERT INTO booking_payments 
          (booking_id, payment_type, amount, payment_method, notes, created_at)
-         VALUES (?, 'refund', ?, 'cash', ?, NOW())`,
-        [booking_id, -deposit_refund, `Security deposit refund - Damage: ${damage_charges}, Extra: ${extra_charges}`]
+         VALUES (?, 'payment', ?, 'cash', ?, NOW())`,
+        [booking_id, -deposit_refund, `Security deposit refund (Deposit: ${booking.security_deposit} - Charges: ${net_damage_charges})`]
       );
     }
 
-    // Create owner earning entry if eligible
-    await createOwnerEarningIfEligible(booking_id);
+    // Create owner earning entry
+    await createOwnerEarningIfEligible(booking_id, connection);
 
+    // Commit transaction
     await connection.commit();
 
+    // Release connection before ledger entry
+    connection.release();
+
+    // Add ledger entry OUTSIDE the transaction
+    try {
+      await addLedgerEntry({
+        entry_type: "return",
+        reference_id: insertResult.insertId,
+        reference_table: "vehicle_return",
+        vehicle_id: booking.vehicle_id,
+        customer_id: booking.customer_id,
+        debit: balanceAmount > 0 ? balanceAmount : 0,
+        credit: balanceAmount < 0 ? Math.abs(balanceAmount) : 0,
+        description: `Vehicle returned - Booking ${booking.booking_code} | Balance: ${balanceAmount > 0 ? 'Due' : 'Refund'} ${Math.abs(balanceAmount)}`
+      });
+    } catch (ledgerError) {
+      console.error('Ledger entry failed but return completed:', ledgerError);
+    }
+
+    // Return comprehensive response
     res.json({
       success: true,
       message: "Return completed successfully",
-      return_id: insertResult.insertId,
+      data: {
+        return_id: insertResult.insertId,
+        booking_id: booking.id,
+        booking_code: booking.booking_code,
+        vehicle: `${booking.car_make} ${booking.car_model}`,
+        registration: booking.registration_no,
+        customer: booking.customer_name
+      },
       calculations: {
         base_amount,
-        extra_charges,
-        damage_charges,
-        late_charges,
-        late_days,
-        final_amount,
-        total_paid,
-        balance_due: balance_amount,
-        deposit_refund: deposit_refund > 0 ? deposit_refund : 0
+        extra_charges: Number(extra_charges),
+        damage_charges: Number(damage_charges),
+        late_charges: calculatedLateCharges,
+        late_days: calculatedLateDays,
+        final_amount: finalAmount,
+        total_paid: totalPaid,
+        balance_due: balanceAmount,
+        deposit_refund: deposit_refund,
+        security_deposit: booking.security_deposit
       }
     });
   } catch (error) {
     await connection.rollback();
     console.error('Error in returnVehicle:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: "Failed to process vehicle return"
+    });
   } finally {
-    connection.release();
+    if (connection && !connection._released) {
+      connection.release();
+    }
   }
 };
 
@@ -362,7 +480,7 @@ export const getPendingReturns = async (req, res) => {
   try {
     const { page = 1, limit = 10, search } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    
+
     let sql = `
       SELECT 
         vh.id as handover_id,
@@ -400,9 +518,9 @@ export const getPendingReturns = async (req, res) => {
       WHERE b.status = 'ongoing'
       AND vr.id IS NULL
     `;
-    
+
     const params = [];
-    
+
     if (search) {
       sql += ` AND (
         b.booking_code LIKE ? OR 
@@ -412,12 +530,12 @@ export const getPendingReturns = async (req, res) => {
       const searchPattern = `%${search}%`;
       params.push(searchPattern, searchPattern, searchPattern);
     }
-    
+
     sql += ` ORDER BY vh.handover_datetime DESC LIMIT ? OFFSET ?`;
     params.push(parseInt(limit), offset);
-    
+
     const [rows] = await pool.query(sql, params);
-    
+
     res.json({
       success: true,
       data: rows,
@@ -461,7 +579,7 @@ export const getReturnById = async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Return record not found' });
     }
-    
+
     res.json(rows[0]);
   } catch (error) {
     console.error('Error in getReturnById:', error);
@@ -473,21 +591,21 @@ export const getReturnById = async (req, res) => {
 export const updateReturn = async (req, res) => {
   try {
     const { id } = req.params;
-    const { 
-      extra_charges, 
-      damage_charges, 
+    const {
+      extra_charges,
+      damage_charges,
       notes,
-      returned_by 
+      returned_by
     } = req.body;
 
     const [existing] = await pool.query(`SELECT * FROM vehicle_return WHERE id = ?`, [id]);
-    
+
     if (existing.length === 0) {
       return res.status(404).json({ message: "Return record not found" });
     }
 
     const existingRecord = existing[0];
-    
+
     const newExtra = extra_charges !== undefined ? extra_charges : existingRecord.extra_charges;
     const newDamage = damage_charges !== undefined ? damage_charges : existingRecord.damage_charges;
     const newFinal = existingRecord.final_amount - existingRecord.extra_charges - existingRecord.damage_charges + newExtra + newDamage;
@@ -512,7 +630,7 @@ export const updateReturn = async (req, res) => {
         id
       ]
     );
-    
+
     res.json({ success: true, message: "Return updated successfully" });
   } catch (error) {
     console.error('Error in updateReturn:', error);
@@ -526,11 +644,11 @@ export const deleteReturn = async (req, res) => {
     const { id } = req.params;
 
     const [result] = await pool.query(`DELETE FROM vehicle_return WHERE id = ?`, [id]);
-    
+
     if (result.affectedRows === 0) {
       return res.status(404).json({ message: "Return record not found" });
     }
-    
+
     res.json({ success: true, message: "Return deleted successfully" });
   } catch (error) {
     console.error('Error in deleteReturn:', error);
@@ -542,15 +660,15 @@ export const deleteReturn = async (req, res) => {
 export const getReturnStatistics = async (req, res) => {
   try {
     const { from_date, to_date } = req.query;
-    
+
     let dateCondition = "WHERE 1=1";
     const params = [];
-    
+
     if (from_date && to_date) {
       dateCondition += ` AND DATE(vr.return_date) BETWEEN ? AND ?`;
       params.push(from_date, to_date);
     }
-    
+
     const [stats] = await pool.query(`
       SELECT 
         COUNT(*) as total_returns,
@@ -566,9 +684,9 @@ export const getReturnStatistics = async (req, res) => {
       FROM vehicle_return vr
       ${dateCondition}
     `, params);
-    
+
     const result = stats[0] || {};
-    
+
     res.json({
       success: true,
       statistics: {

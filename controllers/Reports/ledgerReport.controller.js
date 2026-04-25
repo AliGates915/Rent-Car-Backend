@@ -1,4 +1,3 @@
-// backend/controllers/Reports/profitLoss.controller.js
 import { pool } from "../../config/db.js";
 
 // ====================== PROFIT & LOSS ======================
@@ -10,19 +9,18 @@ export const getProfitLoss = async (req, res) => {
       return res.status(400).json({ message: "from & to dates required" });
     }
 
-    // Get income from booking_payments table
+    // Get income from booking_payments table - removed non-aggregated column
     const incomeSql = `
       SELECT 
         payment_type,
-        SUM(amount) as total_amount,
-        DATE(created_at) as payment_date
+        SUM(amount) as total_amount
       FROM booking_payments
       WHERE DATE(created_at) BETWEEN ? AND ?
         AND payment_type IN ('advance', 'payment')
       GROUP BY payment_type
     `;
 
-    // Get security deposits (these are not income, but collected)
+    // Get security deposits
     const depositSql = `
       SELECT 
         SUM(amount) as total_deposits
@@ -119,130 +117,6 @@ export const getProfitLoss = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in getProfitLoss:', error);
-    res.status(500).json({ error: error.message });
-  }
-};
-
-// ====================== DETAILED PROFIT & LOSS ======================
-export const getDetailedProfitLoss = async (req, res) => {
-  try {
-    const { from, to } = req.query;
-
-    if (!from || !to) {
-      return res.status(400).json({ message: "from & to dates required" });
-    }
-
-    // Get detailed income by day
-    const [dailyIncome] = await pool.query(`
-      SELECT 
-        DATE(created_at) as date,
-        SUM(CASE WHEN payment_type = 'advance' THEN amount ELSE 0 END) as advance_amount,
-        SUM(CASE WHEN payment_type = 'payment' THEN amount ELSE 0 END) as payment_amount,
-        SUM(CASE WHEN payment_type = 'security_deposit' THEN amount ELSE 0 END) as deposit_amount,
-        COUNT(*) as transaction_count
-      FROM booking_payments
-      WHERE DATE(created_at) BETWEEN ? AND ?
-        AND payment_type IN ('advance', 'payment', 'security_deposit')
-      GROUP BY DATE(created_at)
-      ORDER BY date ASC
-    `, [from, to]);
-
-    // Get detailed expenses by day
-    const [dailyExpenses] = await pool.query(`
-      SELECT 
-        DATE(created_at) as date,
-        entry_type,
-        SUM(credit) as amount
-      FROM ledgers
-      WHERE DATE(created_at) BETWEEN ? AND ?
-        AND entry_type IN ('expense', 'maintenance', 'owner')
-      GROUP BY DATE(created_at), entry_type
-      ORDER BY date ASC
-    `, [from, to]);
-
-    // Get income by payment method
-    const [incomeByMethod] = await pool.query(`
-      SELECT 
-        payment_method,
-        SUM(amount) as total_amount,
-        COUNT(*) as transaction_count
-      FROM booking_payments
-      WHERE DATE(created_at) BETWEEN ? AND ?
-        AND payment_type IN ('advance', 'payment')
-      GROUP BY payment_method
-      ORDER BY total_amount DESC
-    `, [from, to]);
-
-    // Get expenses by type (detailed)
-    const [expensesByType] = await pool.query(`
-      SELECT 
-        entry_type as expense_type,
-        SUM(credit) as total_amount,
-        COUNT(*) as transaction_count
-      FROM ledgers
-      WHERE DATE(created_at) BETWEEN ? AND ?
-        AND entry_type IN ('expense', 'maintenance', 'owner')
-      GROUP BY entry_type
-      ORDER BY total_amount DESC
-    `, [from, to]);
-
-    // Get top expense categories
-    const [topExpenses] = await pool.query(`
-      SELECT 
-        description,
-        SUM(credit) as total_amount,
-        COUNT(*) as count
-      FROM ledgers
-      WHERE DATE(created_at) BETWEEN ? AND ?
-        AND entry_type = 'expense'
-      GROUP BY description
-      ORDER BY total_amount DESC
-      LIMIT 10
-    `, [from, to]);
-
-    // Calculate totals
-    let totalIncome = 0;
-    let totalExpense = 0;
-    
-    dailyIncome.forEach(day => {
-      totalIncome += Number(day.advance_amount || 0) + Number(day.payment_amount || 0);
-    });
-    
-    dailyExpenses.forEach(exp => {
-      totalExpense += Number(exp.amount || 0);
-    });
-
-    const netProfit = totalIncome - totalExpense;
-
-    res.json({
-      date_range: { from, to },
-      summary: {
-        total_income: totalIncome,
-        total_expense: totalExpense,
-        net_profit: netProfit,
-        profit_margin: totalIncome > 0 ? ((netProfit / totalIncome) * 100).toFixed(2) : 0
-      },
-      daily_breakdown: {
-        income: dailyIncome.map(day => ({
-          date: day.date,
-          advance: Number(day.advance_amount) || 0,
-          payment: Number(day.payment_amount) || 0,
-          deposits: Number(day.deposit_amount) || 0,
-          total: (Number(day.advance_amount) || 0) + (Number(day.payment_amount) || 0),
-          transaction_count: Number(day.transaction_count) || 0
-        })),
-        expenses: dailyExpenses.map(exp => ({
-          date: exp.date,
-          type: exp.entry_type,
-          amount: Number(exp.amount) || 0
-        }))
-      },
-      income_by_method: incomeByMethod,
-      expenses_by_type: expensesByType,
-      top_expenses: topExpenses
-    });
-  } catch (error) {
-    console.error('Error in getDetailedProfitLoss:', error);
     res.status(500).json({ error: error.message });
   }
 };

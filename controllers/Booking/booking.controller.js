@@ -671,8 +671,11 @@ export const updateBooking = (req, res) => {
   });
 };
 
+
 // ====================== UPDATE STATUS ======================
 export const updateBookingStatus = async (req, res) => {
+  let connection;
+  
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -680,77 +683,122 @@ export const updateBookingStatus = async (req, res) => {
     const allowed = ["pending", "confirmed", "ongoing", "completed", "cancelled"];
 
     if (!allowed.includes(status)) {
-      return res.status(400).json({ message: "Invalid status" });
+      return res.status(400).json({ 
+        success: false,
+        message: "Invalid status",
+        allowed_statuses: allowed 
+      });
     }
 
-    // First get the vehicle_id
-    const [bookingRows] = await pool.query(
-      `SELECT vehicle_id, status as current_status FROM bookings WHERE id = ?`,
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    // Get booking details
+    const [bookingRows] = await connection.query(
+      `SELECT 
+        b.id, 
+        b.vehicle_id, 
+        b.customer_id,
+        b.status as current_status,
+        b.payment_status,
+        b.total_amount,
+        b.total_paid
+      FROM bookings b
+      WHERE b.id = ?`,
       [id]
     );
 
     if (!bookingRows || bookingRows.length === 0) {
-      return res.status(404).json({ message: "Booking not found" });
+      await connection.rollback();
+      return res.status(404).json({ 
+        success: false,
+        message: "Booking not found" 
+      });
     }
 
     const booking = bookingRows[0];
-    const vehicle_id = booking.vehicle_id;
     const currentStatus = booking.current_status;
+
+    // If status is already the same, return success without updating
+    if (currentStatus === status) {
+      await connection.commit();
+      return res.json({
+        success: true,
+        message: `Booking is already ${status}`,
+        data: {
+          booking_id: parseInt(id),
+          status: status,
+          previous_status: currentStatus,
+          payment_status: booking.payment_status
+        }
+      });
+    }
 
     // Validate status transition
     const validTransitions = {
       'pending': ['confirmed', 'cancelled'],
       'confirmed': ['ongoing', 'cancelled'],
-      'ongoing': ['completed'],
+      'ongoing': ['completed', 'cancelled'],
       'completed': [],
       'cancelled': []
     };
 
     if (validTransitions[currentStatus] && !validTransitions[currentStatus].includes(status)) {
+      await connection.rollback();
       return res.status(400).json({
+        success: false,
         message: `Cannot change status from ${currentStatus} to ${status}`,
         allowed_transitions: validTransitions[currentStatus]
       });
     }
 
     // Update booking status
-    const [result] = await pool.query(
-      `UPDATE bookings SET status = ?, updated_at = NOW() WHERE id = ?`,
-      [status, id]
+    const [result] = await connection.query(
+      `UPDATE bookings 
+       SET status = ?, 
+           updated_at = NOW() 
+       WHERE id = ? AND status != ?`,
+      [status, id, status]
     );
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({ message: "Booking not found" });
+      await connection.rollback();
+      return res.status(404).json({ 
+        success: false,
+        message: "Booking not found or status unchanged" 
+      });
     }
 
-    // Update vehicle status based on active bookings
-    let newVehicleStatus;
-    try {
-      newVehicleStatus = await updateVehicleStatus(vehicle_id);
-    } catch (vehicleError) {
-      console.error('Error updating vehicle status:', vehicleError);
-      // Don't fail the request if vehicle status update fails
-      newVehicleStatus = 'unknown';
-    }
+    await connection.commit();
 
     res.json({
       success: true,
-      message: `Booking ${status} successfully`,
-      status: status,
-      previous_status: currentStatus,
-      vehicle_status: newVehicleStatus,
-      booking_id: parseInt(id)
+      message: `Booking status changed from ${currentStatus} to ${status} successfully`,
+      data: {
+        booking_id: parseInt(id),
+        status: status,
+        previous_status: currentStatus,
+        payment_status: booking.payment_status
+      }
     });
 
   } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
     console.error('Error in updateBookingStatus:', error);
     res.status(500).json({ 
       success: false,
       message: "Failed to update booking status",
       error: error.message 
     });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
   }
 };
+
 
 export const cancelBooking = async (req, res) => {
   try {
@@ -822,11 +870,14 @@ export const cancelBooking = async (req, res) => {
   }
 };
 
-// ====================== GET BOOKING BY ID (SIMPLIFIED) ======================
+// backend/controllers/booking.controller.js
+
+// ====================== GET BOOKING BY ID ======================
 export const getBookingById = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Get booking with customer and vehicle details
     const sql = `
       SELECT 
         b.*,
@@ -857,15 +908,71 @@ export const getBookingById = async (req, res) => {
 
     const booking = rows[0];
     
-    // Convert numeric fields
+    // Get total paid amount from booking_payments table
+    const [paymentResult] = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) as total_paid 
+       FROM booking_payments 
+       WHERE booking_id = ? AND payment_type IN ('advance', 'payment', 'security_deposit')`,
+      [id]
+    );
+    
+    const totalPaidFromPayments = parseFloat(paymentResult[0]?.total_paid || 0);
+    
+    // Also get advance amount from payments
+    const [advanceResult] = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) as advance_total 
+       FROM booking_payments 
+       WHERE booking_id = ? AND payment_type = 'advance'`,
+      [id]
+    );
+    
+    const advanceFromPayments = parseFloat(advanceResult[0]?.advance_total || 0);
+    
+    // Get security deposit from payments
+    const [securityResult] = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) as security_total 
+       FROM booking_payments 
+       WHERE booking_id = ? AND payment_type = 'security_deposit'`,
+      [id]
+    );
+    
+    const securityFromPayments = parseFloat(securityResult[0]?.security_total || 0);
+    
+    // Calculate remaining amount
+    const totalAmount = Number(booking.total_amount) || 0;
+    const remainingAmount = totalAmount - totalPaidFromPayments;
+    
+    // Format the booking object
     const formattedBooking = {
-      ...booking,
-      total_amount: Number(booking.total_amount) || 0,
-      advance_amount: Number(booking.advance_amount) || 0,
-      paid_amount: Number(booking.paid_amount) || 0,
-      security_deposit: Number(booking.security_deposit) || 0,
+      id: booking.id,
+      booking_code: booking.booking_code,
+      customer_id: booking.customer_id,
+      vehicle_id: booking.vehicle_id,
+      rent_type_id: booking.rent_type_id,
+      date_from: booking.date_from,
+      date_to: booking.date_to,
+      pickup_city: booking.pickup_city,
+      dropoff_city: booking.dropoff_city,
       rate_per_day: Number(booking.rate_per_day) || 0,
-      remaining_amount: (Number(booking.total_amount) || 0) - (Number(booking.paid_amount) || 0)
+      total_days: booking.total_days,
+      total_amount: totalAmount,
+      advance_amount: advanceFromPayments, // Use actual from payments
+      paid_amount: totalPaidFromPayments, // Use actual from payments
+      security_deposit: securityFromPayments, // Use actual from payments
+      status: booking.status,
+      payment_status: remainingAmount <= 0 ? 'paid' : (totalPaidFromPayments > 0 ? 'partial' : 'unpaid'),
+      created_at: booking.created_at,
+      updated_at: booking.updated_at,
+      customer_name: booking.customer_name,
+      phone_no: booking.phone_no,
+      cnic_no: booking.cnic_no,
+      customer_address: booking.customer_address,
+      registration_no: booking.registration_no,
+      car_make: booking.car_make,
+      car_model: booking.car_model,
+      rent_type_name: booking.rent_type_name,
+      rent_type_description: booking.rent_type_description,
+      remaining_amount: remainingAmount
     };
 
     res.json({
@@ -882,7 +989,6 @@ export const getBookingById = async (req, res) => {
     });
   }
 };
-
 
 
 
