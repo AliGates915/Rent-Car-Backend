@@ -134,7 +134,7 @@ export const createBooking = async (req, res) => {
       await connection.rollback();
       const conflicts = conflictingBookings.map(b =>
         `${b.booking_code} (${b.date_from} to ${b.date_to})`
-      ).join(', ');
+      );
 
       return res.status(400).json({
         message: `Vehicle not available for selected dates. Conflicts with: ${conflicts}`,
@@ -195,7 +195,7 @@ export const createBooking = async (req, res) => {
     if (rental_paid >= total_rental_amount) payment_status = "paid";
     else if (rental_paid > 0) payment_status = "partial";
 
-    const booking_code = `BK-${Date.now()}`;
+   const booking_code = `BK-${Math.floor(1000 + Math.random() * 9000)}`;
 
     // Insert booking within transaction
     const [result] = await connection.query(`
@@ -679,7 +679,8 @@ export const updateBookingStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
-
+    console.log("Status", status);
+    
     const allowed = ["pending", "confirmed", "ongoing", "completed", "cancelled"];
 
     if (!allowed.includes(status)) {
@@ -693,7 +694,7 @@ export const updateBookingStatus = async (req, res) => {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    // Get booking details
+    // Get booking details - FIXED: removed non-existent total_paid
     const [bookingRows] = await connection.query(
       `SELECT 
         b.id, 
@@ -702,7 +703,9 @@ export const updateBookingStatus = async (req, res) => {
         b.status as current_status,
         b.payment_status,
         b.total_amount,
-        b.total_paid
+        b.advance_amount,
+        b.paid_amount,
+        b.security_deposit
       FROM bookings b
       WHERE b.id = ?`,
       [id]
@@ -729,7 +732,9 @@ export const updateBookingStatus = async (req, res) => {
           booking_id: parseInt(id),
           status: status,
           previous_status: currentStatus,
-          payment_status: booking.payment_status
+          payment_status: booking.payment_status,
+          advance_amount: booking.advance_amount,
+          paid_amount: booking.paid_amount
         }
       });
     }
@@ -778,7 +783,9 @@ export const updateBookingStatus = async (req, res) => {
         booking_id: parseInt(id),
         status: status,
         previous_status: currentStatus,
-        payment_status: booking.payment_status
+        payment_status: booking.payment_status,
+        advance_amount: booking.advance_amount,
+        paid_amount: booking.paid_amount
       }
     });
 
@@ -799,78 +806,125 @@ export const updateBookingStatus = async (req, res) => {
   }
 };
 
-
+// ====================== CANCEL BOOKING ======================
 export const cancelBooking = async (req, res) => {
+  let connection;
+  
   try {
     const { id } = req.params;
+    
+    console.log(`Attempting to cancel booking ID: ${id}`);
+
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
 
     // Get booking details
-    const [bookingRows] = await pool.query(
-      `SELECT * FROM bookings WHERE id = ?`,
+    const [bookingRows] = await connection.query(
+      `SELECT b.*, c.balance as customer_balance 
+       FROM bookings b
+       JOIN customers c ON b.customer_id = c.id
+       WHERE b.id = ?`,
       [id]
     );
 
     if (!bookingRows || bookingRows.length === 0) {
-      return res.status(404).json({ message: "Booking not found" });
+      await connection.rollback();
+      return res.status(404).json({ 
+        success: false,
+        message: "Booking not found" 
+      });
     }
 
     const booking = bookingRows[0];
 
     // Check if already cancelled
     if (booking.status === "cancelled") {
-      return res.status(400).json({ message: "Booking already cancelled" });
+      await connection.rollback();
+      return res.status(400).json({ 
+        success: false,
+        message: "Booking already cancelled" 
+      });
     }
 
     // Check if can be cancelled (only pending or confirmed can be cancelled)
     if (!['pending', 'confirmed'].includes(booking.status)) {
+      await connection.rollback();
       return res.status(400).json({ 
+        success: false,
         message: `Cannot cancel booking with status '${booking.status}'. Only pending or confirmed bookings can be cancelled.` 
       });
     }
 
     // Update status to cancelled
-    const [result] = await pool.query(
-      `UPDATE bookings SET status = 'cancelled', updated_at = NOW() WHERE id = ?`,
+    const [result] = await connection.query(
+      `UPDATE bookings 
+       SET status = 'cancelled', 
+           updated_at = NOW() 
+       WHERE id = ? AND status != 'cancelled'`,
       [id]
     );
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(400).json({ 
+        success: false,
+        message: "Failed to cancel booking" 
+      });
+    }
 
     // Reverse customer balance (add back the paid amount)
     const paid_amount = Number(booking.paid_amount || 0);
     if (paid_amount > 0) {
-      await pool.query(
-        `UPDATE customers SET balance = balance - ? WHERE id = ?`,
+      const [updateBalance] = await connection.query(
+        `UPDATE customers 
+         SET balance = balance - ?,
+             updated_at = NOW()
+         WHERE id = ?`,
         [paid_amount, booking.customer_id]
       );
+      
+      console.log(`Refunded ${paid_amount} to customer ${booking.customer_id}`);
     }
 
-    // Update vehicle status - check if vehicle becomes available
-    let newVehicleStatus;
+    await connection.commit();
+
+    // Update vehicle status asynchronously (don't wait for it)
+    let newVehicleStatus = 'unknown';
     try {
       newVehicleStatus = await updateVehicleStatus(booking.vehicle_id);
     } catch (vehicleError) {
       console.error('Error updating vehicle status:', vehicleError);
-      newVehicleStatus = 'unknown';
     }
 
     res.json({
       success: true,
       message: "Booking cancelled successfully",
-      booking_code: booking.booking_code,
-      vehicle_status: newVehicleStatus,
-      refund_amount: paid_amount
+      data: {
+        booking_id: parseInt(id),
+        booking_code: booking.booking_code,
+        status: 'cancelled',
+        previous_status: booking.status,
+        refund_amount: paid_amount,
+        vehicle_status: newVehicleStatus
+      }
     });
 
   } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
     console.error('Error in cancelBooking:', error);
     res.status(500).json({ 
       success: false,
       message: "Failed to cancel booking",
       error: error.message 
     });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
   }
 };
-
-// backend/controllers/booking.controller.js
 
 // ====================== GET BOOKING BY ID ======================
 export const getBookingById = async (req, res) => {
@@ -990,9 +1044,6 @@ export const getBookingById = async (req, res) => {
   }
 };
 
-
-
-// Add this new function to get confirmed bookings
 // ====================== GET CONFIRMED BOOKINGS (SIMPLIFIED) ======================
 export const getConfirmedBookings = async (req, res) => {
   try {

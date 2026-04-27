@@ -53,8 +53,6 @@ export const createHandover = async (req, res) => {
       km_out,
       fuel_level_out,
       vehicle_out_notes,
-      customer_signature_url,
-      staff_signature_url,
       accessories,
     } = req.body;
 
@@ -142,9 +140,8 @@ export const createHandover = async (req, res) => {
     const [handoverResult] = await connection.query(`
       INSERT INTO vehicle_handover
       (booking_id, vehicle_id, handed_over_by, handover_date, handover_time,
-       km_out, fuel_level_out, vehicle_out_notes,
-       customer_signature_url, staff_signature_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       km_out, fuel_level_out, vehicle_out_notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       booking_id, 
       vehicle_id, 
@@ -154,8 +151,6 @@ export const createHandover = async (req, res) => {
       kmOutNum,
       fuel_level_out, 
       vehicle_out_notes || null,
-      customer_signature_url || null, 
-      staff_signature_url || null
     ]);
 
     const handover_id = handoverResult.insertId;
@@ -228,7 +223,6 @@ export const createHandover = async (req, res) => {
   }
 };
 
-// ====================== GET HANDOVERS (UPDATED - Only existing columns) ======================
 export const getHandovers = async (req, res) => {
   try {
     const { 
@@ -278,11 +272,14 @@ export const getHandovers = async (req, res) => {
         b.date_to,
         c.customer_name,
         c.phone_no AS customer_phone,
-        c.cnic_no AS customer_cnic
+        c.cnic_no AS customer_cnic,
+        vi.image_url,
+        vi.public_id
       FROM vehicle_handover vh
       INNER JOIN vehicles v ON vh.vehicle_id = v.id
       INNER JOIN bookings b ON vh.booking_id = b.id
       INNER JOIN customers c ON b.customer_id = c.id
+      LEFT JOIN vehicle_images vi ON vh.vehicle_id = vi.vehicle_id
       WHERE 1=1
     `;
     
@@ -324,7 +321,7 @@ export const getHandovers = async (req, res) => {
     
     const [rows] = await pool.query(sql, queryParams);
     
-    // Get total count
+    // Get total count (same as before)
     let countSql = `SELECT COUNT(*) as total FROM vehicle_handover vh INNER JOIN bookings b ON vh.booking_id = b.id WHERE 1=1`;
     const countParams = [];
     
@@ -342,50 +339,69 @@ export const getHandovers = async (req, res) => {
     const totalCount = countResult[0]?.total || 0;
     const totalPages = Math.ceil(totalCount / limitValue);
     
-    // Format response
-    const formattedRows = rows.map(row => ({
-      id: row.id,
-      booking_id: row.booking_id,
-      vehicle_id: row.vehicle_id,
-      handed_over_by: row.handed_over_by,
-      handover_date: row.handover_date,
-      handover_time: row.handover_time,
-      handover_datetime: `${row.handover_date} ${row.handover_time}`,
-      km_out: parseInt(row.km_out) || 0,
-      fuel_level_out: row.fuel_level_out,
-      vehicle_out_notes: row.vehicle_out_notes,
-      customer_signature_url: row.customer_signature_url,
-      staff_signature_url: row.staff_signature_url,
-      vehicle: {
-        id: row.vehicle_id,
-        registration_no: row.registration_no,
-        car_make: row.car_make,
-        car_model: row.car_model,
-        car_type: row.car_type,
-        rate_per_day: parseFloat(row.rate_per_day) || 0,
-        color: row.color,
-        transmission_type: row.transmission_type,
-        fuel_type: row.fuel_type
-      },
-      booking: {
-        id: row.booking_id,
-        code: row.booking_code,
-        status: row.booking_status,
-        total_days: row.total_days,
-        total_amount: parseFloat(row.total_amount) || 0,
-        advance_amount: parseFloat(row.advance_amount) || 0,
-        paid_amount: parseFloat(row.paid_amount) || 0,
-        date_from: row.date_from,
-        date_to: row.date_to
-      },
-      customer: {
-        name: row.customer_name,
-        phone: row.customer_phone,
-        cnic: row.customer_cnic
-      },
-      created_at: row.created_at,
-      updated_at: row.updated_at
-    }));
+    // Group images by handover/vehicle
+    const handoverMap = new Map();
+    
+    rows.forEach(row => {
+      const handoverId = row.id;
+      
+      if (!handoverMap.has(handoverId)) {
+        handoverMap.set(handoverId, {
+          id: row.id,
+          booking_id: row.booking_id,
+          vehicle_id: row.vehicle_id,
+          handed_over_by: row.handed_over_by,
+          handover_date: row.handover_date,
+          handover_time: row.handover_time,
+          handover_datetime: `${row.handover_date} ${row.handover_time}`,
+          km_out: parseInt(row.km_out) || 0,
+          fuel_level_out: row.fuel_level_out,
+          vehicle_out_notes: row.vehicle_out_notes,
+          customer_signature_url: row.customer_signature_url,
+          staff_signature_url: row.staff_signature_url,
+          vehicle: {
+            id: row.vehicle_id,
+            registration_no: row.registration_no,
+            car_make: row.car_make,
+            car_model: row.car_model,
+            car_type: row.car_type,
+            rate_per_day: parseFloat(row.rate_per_day) || 0,
+            color: row.color,
+            transmission_type: row.transmission_type,
+            fuel_type: row.fuel_type
+          },
+          booking: {
+            id: row.booking_id,
+            code: row.booking_code,
+            status: row.booking_status,
+            total_days: row.total_days,
+            total_amount: parseFloat(row.total_amount) || 0,
+            advance_amount: parseFloat(row.advance_amount) || 0,
+            paid_amount: parseFloat(row.paid_amount) || 0,
+            date_from: row.date_from,
+            date_to: row.date_to
+          },
+          customer: {
+            name: row.customer_name,
+            phone: row.customer_phone,
+            cnic: row.customer_cnic
+          },
+          images: [],
+          created_at: row.created_at,
+          updated_at: row.updated_at
+        });
+      }
+      
+      // Add image if exists
+      if (row.image_url) {
+        handoverMap.get(handoverId).images.push({
+          url: row.image_url,
+          public_id: row.public_id
+        });
+      }
+    });
+    
+    const formattedRows = Array.from(handoverMap.values());
     
     res.json({
       success: true,

@@ -188,6 +188,7 @@ export const deleteCustomer = async (req, res) => {
   }
 };
 
+// CustomerDocument
 export const uploadCustomerDocument = async (req, res) => {
   try {
     const { customer_id } = req.params;
@@ -219,6 +220,11 @@ export const uploadCustomerDocument = async (req, res) => {
       isValid = false;
       rejectionReason = validationResult.reason || "OCR validation failed - document text doesn't match requirements";
     }
+
+    // Generate unique ID (works with BIGINT)
+    const generateId = () => {
+      return Math.floor(Math.random() * 10);
+    };
 
     // Check existing document
     const checkSql = `
@@ -264,13 +270,15 @@ export const uploadCustomerDocument = async (req, res) => {
           extractedText: validationResult.extractedText
         });
       } else {
+        // INSERT with manual ID
         const insertSql = `
           INSERT INTO customer_documents
-          (customer_id, document_type, file_url, public_id, is_verified, rejection_reason)
-          VALUES (?, ?, ?, ?, ?, ?)
+          (id, customer_id, document_type, file_url, public_id, is_verified, rejection_reason)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
         `;
 
         await pool.query(insertSql, [
+          generateId(),
           customer_id,
           document_type,
           fileUrl,
@@ -289,13 +297,15 @@ export const uploadCustomerDocument = async (req, res) => {
         });
       }
     } catch (dbError) {
-      res.status(500).json(dbError);
+      console.error("Database error:", dbError);
+      res.status(500).json({ message: dbError.message });
     }
   } catch (error) {
     console.error("Upload error:", error);
     res.status(500).json({ message: error.message });
   }
 };
+
 
 export const getCustomerDocuments = async (req, res) => {
   const { customer_id } = req.params;

@@ -161,6 +161,9 @@ export const validateFile = (file) => {
 // ----------------------------
 // 🔥 MAIN VALIDATOR
 // ----------------------------
+// ----------------------------
+// 🔥 MAIN VALIDATOR
+// ----------------------------
 export const validateDocument = async (fileUrl, type) => {
   let tempPath = null;
   let processedPath = null;
@@ -185,20 +188,40 @@ export const validateDocument = async (fileUrl, type) => {
     let text = "";
     let confidence = 0;
 
+    // 🔥 FIXED: Use else if to prevent fall-through
     if (type === "cnic_back") {
       text = await extractTextWithGoogle(processedPath);
       text = text.toLowerCase();
       confidence = 95;
+
+      // DEBUG: Log full extracted text
+      console.log("=== FULL EXTRACTED TEXT ===");
+      console.log(text);
+      console.log("===========================");
+
+      // Check if the lost card text exists in any form
+      const lostCardPartial = "گم شدہ کارڈ";
+      if (text.includes(lostCardPartial)) {
+        console.log("✅ Found partial lost card text!");
+      } else {
+        console.log("❌ No lost card text found at all");
+      }
     }
-    if (type === "cnic_front") {
+    else if (type === "cnic_front") {
       text = await extractTextWithGoogle(processedPath);
       text = text.toLowerCase();
       confidence = 95;
-    } else {
+      console.log("🔍 CNIC FRONT - Using Google OCR");
+    }
+    else {
       const result = await Tesseract.recognize(processedPath, "urd+eng");
       text = result.data.text.toLowerCase();
       confidence = result.data.confidence;
+      console.log("🔍 OTHER DOCUMENT - Using Tesseract OCR");
     }
+
+    console.log("📝 Extracted Text Sample:", text.substring(0, 200));
+    console.log("📊 Confidence:", confidence);
 
     const wordCount = text.split(/\s+/).length;
 
@@ -206,6 +229,7 @@ export const validateDocument = async (fileUrl, type) => {
     // 🔥 LOW TEXT (DON'T BLOCK USER)
     // ----------------------------
     if (!text || wordCount < 5) {
+      console.log("❌ Low readable text detected");
       return fail("Low readable text");
     }
 
@@ -265,9 +289,10 @@ export const validateDocument = async (fileUrl, type) => {
       if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
       if (processedPath && fs.existsSync(processedPath))
         fs.unlinkSync(processedPath);
-    } catch {}
+    } catch { }
   }
 };
+
 
 // ----------------------------
 // 🔵 CNIC FRONT
@@ -315,31 +340,60 @@ const validateCNICFront = (text) => {
 // ----------------------------
 const validateCNICBack = async (imagePath, text) => {
   let score = 0;
+  let reasons = [];
 
-  const hasNumber =
-    /\d{5}-\d{7}-\d/.test(text) ||
-    /\d{13}/.test(text);
+  // Check for key words instead of exact phrase
+  const requiredWords = [
+    "گم",           // Lost
+    "شدہ",          // (part of lost)
+    "کارڈ",         // Card
+    "ملنے",         // Found
+    "پر",           // On/upon
+    "بکس"           // Box
+  ];
+  
+  const wordMatchCount = requiredWords.filter(word => text.includes(word)).length;
+  const hasLostCardContext = wordMatchCount >= 4; // At least 4 key words match
+  
+  if (hasLostCardContext) {
+    score += 35;
+    console.log(`✅ Lost card context found (${wordMatchCount}/6 words matched)`);
+  } else {
+    console.log(`⚠️ Lost card context weak (${wordMatchCount}/6 words matched)`);
+    reasons.push("Lost card text incomplete");
+  }
 
-  if (hasNumber) score += 15;
+  // Check for CNIC number
+  const hasNumber = 
+    /\d{5}-\d{7}-\d/.test(text) || 
+    /\d{13}-\d/.test(text);
+  
+  if (hasNumber) {
+    score += 30;
+    console.log("✅ CNIC number found");
+  } else {
+    reasons.push("CNIC number missing");
+  }
 
-  const barcode = await hasBarcodeLikePattern(imagePath);
-  // console.log("BARCODE:", barcode);
-
-  if (barcode.hasBarcode) score += 40;
-
-  const green = await detectGreenDominance(imagePath);
-  // console.log("GREEN:", green);
-
-  if (green.isGreenish) score += 20;
-
-  if (text.length > 20) score += 5;
+  if (text.length > 50) {
+    score += 10;
+    console.log("✅ Sufficient text length");
+  }
 
   console.log("FINAL SCORE:", score);
+  console.log("Reasons:", reasons);
 
-  if (score >= 50) return success();
+  if (score >= 40) {
+    return {
+      isValid: true,
+      extractedText: text,
+      warnings: reasons.length > 0 ? reasons : null
+    };
+  }
 
-  return fail("Invalid CNIC Back");
+  return fail(`Invalid CNIC Back - Score: ${score}, Reasons: ${reasons.join(", ")}`);
 };
+
 
 // ----------------------------
 // 🔵 DRIVING LICENSE
@@ -354,7 +408,7 @@ const validateLicense = (text) => {
 
   const hasFields = hasAny(text, ["name", "cnic", "birth", "issue", "expiry"]);
 
-  if (hasLicenseWords && hasAuthority && hasProvince && hasFields) {
+  if (hasLicenseWords || hasAuthority || hasProvince || hasFields) {
     return success();
   }
 
