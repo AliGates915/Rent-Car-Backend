@@ -130,20 +130,23 @@ export const getDaybookDetailed = async (req, res) => {
       return res.status(400).json({ message: "date parameter is required" });
     }
 
+    // First, get all columns from the table
+    const [columns] = await pool.query(`SHOW COLUMNS FROM ledgers`);
+    const columnNames = columns.map(col => col.Field);
+    
+    // Build SELECT clause dynamically based on existing columns
+    const selectFields = ['id', 'entry_type', 'description', 'debit', 'credit', 'created_at as entry_date'];
+    
+    // Add optional fields if they exist
+    const optionalFields = ['reference', 'reference_id', 'reference_table', 'customer_id', 'vehicle_id', 'owner_id'];
+    optionalFields.forEach(field => {
+      if (columnNames.includes(field)) {
+        selectFields.push(field);
+      }
+    });
+    
     const sql = `
-      SELECT 
-        id,
-        entry_type,
-        description,
-        debit,
-        credit,
-        created_at as entry_date,
-        reference,
-        reference_id,
-        reference_table,
-        customer_id,
-        vehicle_id,
-        owner_id
+      SELECT ${selectFields.join(', ')}
       FROM ledgers
       WHERE DATE(created_at) = ?
       ORDER BY created_at ASC
