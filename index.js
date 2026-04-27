@@ -31,7 +31,13 @@ await db();
 
 const app = express();
 
-app.use(cors());
+// Configure CORS properly
+app.use(cors({
+  origin: ['http://localhost:8080', 'https://rent-car-frontend-20.vercel.app'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 // Root route handler
