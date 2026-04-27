@@ -23,7 +23,7 @@ import dayBook from "./routes/daybook/daybook.routes.js";
 import { userRoutes } from "./routes/user.routes.js";
 
 // TEMPORARILY COMMENTED OUT - Fix missing file
-// import dashboardRoutes from './routes/dashboardRoutes.js';
+import dashboardRoutes from './routes/dashboard.routes.js';
 
 dotenv.config();
 
@@ -77,7 +77,7 @@ app.use("/api/owners", ownerRoutes);
 app.use("/api/daybook", dayBook);
 
 // TEMPORARILY COMMENTED OUT - dashboard routes
-// app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // ✅ CORRECT 404 handler - NO '*' parameter
 app.use((req, res) => {
