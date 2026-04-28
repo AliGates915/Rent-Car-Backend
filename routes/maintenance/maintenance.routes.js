@@ -6,20 +6,37 @@ import {
   updateMaintenance,
   deleteMaintenance,
   completeMaintenance,
-  getDueMaintenance
+  getDueMaintenance,
+  getMaintenanceSummary,
+  getMonthlyMaintenanceCosts,
 } from "../../controllers/Maintenance/maintenance.controller.js";
-
 import { protect } from "../../middlewares/auth.middleware.js";
 
 const router = express.Router();
 
-router.post("/", protect, addMaintenanceLog);
-router.get("/", protect, getMaintenanceLogs);
-router.get("/:id", protect, getMaintenanceById);
-router.put("/:id", protect, updateMaintenance);
-router.delete("/:id", protect, deleteMaintenance);
+// All routes require authentication
+router.use(protect);
 
-router.post("/complete", protect, completeMaintenance);
-router.get("/due", protect, getDueMaintenance);
+// Main routes
+router.route("/")
+  .get(getMaintenanceLogs)
+  .post(addMaintenanceLog);
+
+router.route("/due")
+  .get(getDueMaintenance);
+
+router.route("/complete")
+  .post(completeMaintenance);
+
+router.route("/summary")
+  .get(getMaintenanceSummary);
+
+router.route("/monthly-costs")
+  .get(getMonthlyMaintenanceCosts);
+
+router.route("/:id")
+  .get(getMaintenanceById)
+  .put(updateMaintenance)
+  .delete(deleteMaintenance);
 
 export default router;
